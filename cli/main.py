@@ -7,6 +7,7 @@ Commands:
   evidence-bundle Build and verify tamper-evident evidence bundles
   issue-sync      Export GitHub/JIRA remediation payloads
   lifecycle       Query and manage vulnerability lifecycle state transitions
+  notify-sla      Build or send Slack / Teams SLA notifications
   risk-acceptance Create, verify and apply signed risk acceptance records
 """
 import json
@@ -36,6 +37,8 @@ from vuln_management.risk_acceptance import (
 )
 from vuln_management.issue_sync import export_issue_sync_payloads
 from vuln_management.retest import generate_retest_diff_report, schedule_retest
+from vuln_management.sla_notifications import build_notification_payload, send_webhook_notification
+from vuln_management.sla_report import build_sla_report
 from vuln_management.tracker import VulnerabilityTracker
 
 
@@ -102,6 +105,67 @@ def generate(findings_file: str, fmt: str, output: str) -> None:
     else:
         Path(output).write_text(report)
         click.echo(f"Report written to {output}")
+
+
+@cli.command("notify-sla")
+@click.argument("findings_file", type=click.Path(exists=True))
+@click.option("--channel", required=True, type=click.Choice(["slack", "teams"]), help="Webhook target type.")
+@click.option("--webhook-url", default="", help="Webhook URL. Required unless --dry-run is used.")
+@click.option(
+    "--minimum-tier",
+    default="breached",
+    type=click.Choice(["warning", "breached", "critical-breach"]),
+    show_default=True,
+    help="Lowest escalation tier to include in the notification body.",
+)
+@click.option("--max-findings", default=5, type=int, show_default=True, help="Maximum findings listed in the payload.")
+@click.option("--repository-label", default="offensive-gvuln", show_default=True, help="Repository label shown in the message.")
+@click.option("--dry-run", is_flag=True, default=False, help="Print the JSON payload instead of sending it.")
+@click.option("--output", "-o", default="-", help="Payload output path when using --dry-run.")
+def notify_sla(
+    findings_file: str,
+    channel: str,
+    webhook_url: str,
+    minimum_tier: str,
+    max_findings: int,
+    repository_label: str,
+    dry_run: bool,
+    output: str,
+) -> None:
+    """Build or send a Slack / Teams SLA breach notification."""
+    raw = json.loads(Path(findings_file).read_text(encoding="utf-8"))
+    findings = [Finding(**item) for item in raw]
+    report = build_sla_report(findings)
+
+    try:
+        payload = build_notification_payload(
+            report,
+            channel=channel,
+            repository_label=repository_label,
+            minimum_tier=minimum_tier,
+            max_findings=max_findings,
+        )
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    serialized = json.dumps(payload.body, indent=2)
+    if dry_run:
+        if output == "-":
+            click.echo(serialized)
+        else:
+            Path(output).write_text(serialized, encoding="utf-8")
+            click.echo(f"SLA notification payload written to {output}")
+        return
+
+    if not webhook_url.strip():
+        raise click.ClickException("--webhook-url is required unless --dry-run is used")
+
+    try:
+        status_code = send_webhook_notification(webhook_url, payload)
+    except Exception as exc:  # pragma: no cover - network failures depend on environment
+        raise click.ClickException(f"Failed to deliver notification: {exc}") from exc
+
+    click.echo(f"SLA notification delivered to {channel} webhook (HTTP {status_code})")
 
 
 @cli.group("evidence-bundle")

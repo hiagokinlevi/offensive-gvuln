@@ -10,9 +10,11 @@
 2. Write a ScopeValidator for a fictional engagement
 3. Render a RoE document and review its structure
 4. Collect and hash evidence files with EvidenceCollector
+5. Build a `gvuln notify-sla --dry-run` payload and review which findings would page the remediation team
 
 ## Advanced
 1. Extend the state machine with a custom transition (e.g., REMEDIATED → VERIFIED)
 2. Build a FastAPI wrapper around VulnerabilityTracker
 3. Integrate with a JIRA project via the REST API
 4. Add CVSS v3.1 score calculation to the SLA prioritization model
+5. Wire `gvuln notify-sla` into a scheduled workflow that posts only warning-or-higher findings

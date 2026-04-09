@@ -19,6 +19,7 @@ Security teams often lack standardized processes for tracking vulnerability reme
 - Generate tamper-evident evidence bundles and verify them before handoff
 - Produce executive and technical vulnerability reports
 - Monitor overdue remediations by severity tier
+- Send Slack or Microsoft Teams webhook notifications for SLA breaches
 - Operate signed risk acceptance workflows with approver traceability
 - Schedule verification retests and generate before/after diff reports
 - Export normalized GitHub and JIRA issue payloads for remediation tracking
@@ -87,6 +88,19 @@ gvuln issue-sync export findings.json \
   --project-key SEC \
   --component appsec \
   --output jira-issues.json
+
+# Build a Slack or Teams SLA notification payload for offline review
+gvuln notify-sla findings.json \
+  --channel slack \
+  --minimum-tier breached \
+  --dry-run \
+  --output slack-payload.json
+
+# Send a live webhook notification once the payload looks correct
+gvuln notify-sla findings.json \
+  --channel teams \
+  --minimum-tier warning \
+  --webhook-url "$GVULN_TEAMS_WEBHOOK_URL"
 ```
 
 ## How to Contribute
@@ -100,6 +114,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 - v0.3: Automated evidence packaging, PDF report generation
 - v0.3: Tamper-evident evidence bundle verification
 - v0.3: Offline-safe GitHub/JIRA remediation issue export
+- v0.3: Slack/Teams SLA breach notifications
 - v0.4: Integration with Nuclei, Burp Suite, Nessus output formats
 - v0.5: Retest scheduling and outcome diff reporting
 

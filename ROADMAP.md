@@ -18,7 +18,7 @@
 ## v0.3 — Integrations
 - [x] JIRA issue sync adapter
 - [x] GitHub Issues sync adapter
-- [ ] Slack/Teams SLA breach notifications
+- [x] Slack/Teams SLA breach notifications
 
 ## v0.4 — Risk Scoring
 - [x] CVSS v3.1 base score calculator (complete formula, roundup, severity ratings, vector string parser)

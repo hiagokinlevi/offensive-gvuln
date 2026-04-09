@@ -74,6 +74,16 @@ This makes the bundle itself tamper-evident, not just the individual raw artifac
 
 This keeps the repository offline-safe while still closing the handoff gap between discovery and ticketed remediation.
 
+### SLA Notification Payloads
+
+`sla_notifications.py` converts the structured `SLAReport` output into webhook-safe Slack and Microsoft Teams payloads:
+
+- `build_notification_payload()` reuses the existing warning, breached, and critical-breach tiers so alerts stay consistent with local CLI and file-based reporting.
+- `send_webhook_notification()` uses standard-library HTTP delivery so teams can post the payload without introducing a `requests` dependency or breaking offline editable installs.
+- The `gvuln notify-sla` CLI supports `--dry-run` payload export, which lets teams review the exact JSON that will be sent before they attach a real webhook URL.
+
+This closes the operational gap between "we can calculate overdue findings" and "we can route the alert into the chat system that the remediation team already watches."
+
 ## Design Decisions
 
 - **Pydantic v2** for all models: runtime validation, `model_dump(mode="json")` for serialization.
