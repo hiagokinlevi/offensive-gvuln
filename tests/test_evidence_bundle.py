@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from vuln_management.evidence_bundle import generate_bundle
+from vuln_management.evidence_bundle import generate_bundle, verify_bundle
 from vuln_management.models import Finding, FindingStatus, Severity
 from vuln_management.tracker import VulnerabilityTracker
 
@@ -233,6 +233,73 @@ class TestManifestSorting(unittest.TestCase):
             manifest = json.loads((bundle / "manifest.json").read_text())
         self.assertEqual(manifest["total_findings"], 0)
         self.assertEqual(manifest["open_findings"], 0)
+
+
+class TestBundleIntegrity(unittest.TestCase):
+
+    def test_manifest_contains_integrity_entries(self):
+        tracker = _tracker(_finding("Tamper Evidence"))
+        with tempfile.TemporaryDirectory() as tmpdir:
+            bundle = generate_bundle(
+                tracker=tracker,
+                output_dir=Path(tmpdir),
+                engagement_id="INTEGRITY-001",
+            )
+            manifest = json.loads((bundle / "manifest.json").read_text())
+
+        self.assertEqual(manifest["integrity"]["algorithm"], "sha256")
+        recorded_paths = {entry["path"] for entry in manifest["integrity"]["files"]}
+        self.assertIn("summary.md", recorded_paths)
+        self.assertTrue(any(path.startswith("findings/") for path in recorded_paths))
+
+    def test_verify_bundle_accepts_pristine_bundle(self):
+        tracker = _tracker(_finding("Clean Bundle"))
+        with tempfile.TemporaryDirectory() as tmpdir:
+            bundle = generate_bundle(
+                tracker=tracker,
+                output_dir=Path(tmpdir),
+                engagement_id="INTEGRITY-002",
+            )
+            result = verify_bundle(bundle)
+
+        self.assertTrue(result.is_valid)
+        self.assertEqual(result.expected_files, result.verified_files)
+        self.assertEqual(result.missing_files, [])
+        self.assertEqual(result.modified_files, [])
+        self.assertEqual(result.unexpected_files, [])
+
+    def test_verify_bundle_detects_modified_file(self):
+        tracker = _tracker(_finding("Modified Summary"))
+        with tempfile.TemporaryDirectory() as tmpdir:
+            bundle = generate_bundle(
+                tracker=tracker,
+                output_dir=Path(tmpdir),
+                engagement_id="INTEGRITY-003",
+            )
+            (bundle / "summary.md").write_text("tampered", encoding="utf-8")
+            result = verify_bundle(bundle)
+
+        self.assertFalse(result.is_valid)
+        self.assertIn("summary.md", result.modified_files)
+
+    def test_verify_bundle_detects_missing_and_unexpected_files(self):
+        tracker = _tracker(_finding("Missing And Unexpected"))
+        with tempfile.TemporaryDirectory() as tmpdir:
+            bundle = generate_bundle(
+                tracker=tracker,
+                output_dir=Path(tmpdir),
+                engagement_id="INTEGRITY-004",
+            )
+            finding_file = next((bundle / "findings").glob("*.json"))
+            missing_relative = finding_file.relative_to(bundle).as_posix()
+            finding_file.unlink()
+            extra_file = bundle / "notes.txt"
+            extra_file.write_text("out-of-band artifact", encoding="utf-8")
+            result = verify_bundle(bundle)
+
+        self.assertFalse(result.is_valid)
+        self.assertIn(missing_relative, result.missing_files)
+        self.assertIn("notes.txt", result.unexpected_files)
 
 
 if __name__ == "__main__":

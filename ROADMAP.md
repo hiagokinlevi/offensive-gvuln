@@ -8,6 +8,7 @@
 - [x] Pentest scope validator (exact, CIDR, wildcard)
 - [x] Rules of Engagement template renderer
 - [x] Evidence collector with SHA-256 manifest
+- [x] Tamper-evident evidence bundle verification for delivery handoff
 
 ## v0.2 — REST API
 - [ ] FastAPI REST service for findings CRUD
@@ -15,8 +16,8 @@
 - [ ] WebSocket live SLA breach alerts
 
 ## v0.3 — Integrations
-- [ ] JIRA issue sync adapter
-- [ ] GitHub Issues sync adapter
+- [x] JIRA issue sync adapter
+- [x] GitHub Issues sync adapter
 - [ ] Slack/Teams SLA breach notifications
 
 ## v0.4 — Risk Scoring

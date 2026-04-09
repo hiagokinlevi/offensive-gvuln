@@ -55,6 +55,25 @@ This closes the gap between "fix claimed" and "fix verified" while keeping the w
 - **RoEConfig + render_roe()**: Produces a Jinja2-rendered RoE document for sign-off.
 - **EvidenceCollector**: Copies files to a case directory and produces a SHA-256 manifest for chain-of-custody.
 
+### Evidence Bundle Integrity
+
+`evidence_bundle.py` now produces delivery bundles with an embedded SHA-256 integrity inventory:
+
+- `generate_bundle()` writes the usual manifest, summary, per-finding JSON, and SLA status files, then appends an `integrity.files[]` block with hash and byte-size metadata for every delivered artifact in the bundle except the manifest itself.
+- `verify_bundle()` replays those checks at handoff or intake time and flags missing, modified, or unexpected files before evidence is trusted.
+
+This makes the bundle itself tamper-evident, not just the individual raw artifacts collected during the engagement.
+
+### Issue Sync Adapters
+
+`issue_sync.py` exports tracker-native remediation payloads without requiring live API credentials during triage:
+
+- `build_github_issue_payload()` maps findings into GitHub-friendly titles, labels, assignees, and a Markdown body that preserves SLA and asset context.
+- `build_jira_issue_payload()` maps severity into JIRA priorities, carries due dates from the SLA engine, and preserves component metadata for queue routing.
+- `export_issue_sync_payloads()` sorts findings by urgency, filters closed work by default, and emits a deterministic JSON bundle that another automation layer can POST later.
+
+This keeps the repository offline-safe while still closing the handoff gap between discovery and ticketed remediation.
+
 ## Design Decisions
 
 - **Pydantic v2** for all models: runtime validation, `model_dump(mode="json")` for serialization.

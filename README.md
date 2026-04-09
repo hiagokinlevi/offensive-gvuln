@@ -16,10 +16,12 @@ Security teams often lack standardized processes for tracking vulnerability reme
 - Validate pentest scope before engagement begins
 - Generate Rules of Engagement documents for authorized assessments
 - Collect and hash evidence for audit trails
+- Generate tamper-evident evidence bundles and verify them before handoff
 - Produce executive and technical vulnerability reports
 - Monitor overdue remediations by severity tier
 - Operate signed risk acceptance workflows with approver traceability
 - Schedule verification retests and generate before/after diff reports
+- Export normalized GitHub and JIRA issue payloads for remediation tracking
 
 ## Structure
 
@@ -65,6 +67,26 @@ python -m cli.main retest schedule findings.json \
   --save
 
 python -m cli.main retest diff findings-before.json findings-after.json
+
+# Generate and verify a tamper-evident evidence bundle
+gvuln evidence-bundle generate findings.json \
+  --engagement-id PENTEST-2026-001 \
+  --output-dir ./evidence \
+  --client-name "Example Corp"
+
+gvuln evidence-bundle verify ./evidence/PENTEST-2026-001
+
+# Export open findings as GitHub or JIRA issue payloads
+gvuln issue-sync export findings.json \
+  --target github \
+  --repo example-org/security-remediation \
+  --assignee appsec-owner
+
+gvuln issue-sync export findings.json \
+  --target jira \
+  --project-key SEC \
+  --component appsec \
+  --output jira-issues.json
 ```
 
 ## How to Contribute
@@ -76,6 +98,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 - v0.1: Core vulnerability models, SLA engine, scope validator
 - v0.2: CVSS scoring integration, JIRA/GitHub Issues export
 - v0.3: Automated evidence packaging, PDF report generation
+- v0.3: Tamper-evident evidence bundle verification
+- v0.3: Offline-safe GitHub/JIRA remediation issue export
 - v0.4: Integration with Nuclei, Burp Suite, Nessus output formats
 - v0.5: Retest scheduling and outcome diff reporting
 

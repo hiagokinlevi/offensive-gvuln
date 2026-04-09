@@ -27,7 +27,9 @@ Usage:
 """
 from __future__ import annotations
 
+import hashlib
 import json
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -86,6 +88,67 @@ def _severity_badge(severity: Severity) -> str:
         Severity.LOW:      "Low",
         Severity.INFO:     "Info",
     }.get(severity, severity.value)
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(8192), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _relative_bundle_files(bundle_root: Path) -> list[Path]:
+    return sorted(
+        path.relative_to(bundle_root)
+        for path in bundle_root.rglob("*")
+        if path.is_file()
+    )
+
+
+def _build_integrity_entries(bundle_root: Path) -> list[dict[str, int | str]]:
+    entries: list[dict[str, int | str]] = []
+    for relative_path in _relative_bundle_files(bundle_root):
+        if relative_path.as_posix() == "manifest.json":
+            continue
+        absolute_path = bundle_root / relative_path
+        entries.append(
+            {
+                "path": relative_path.as_posix(),
+                "sha256": _sha256_file(absolute_path),
+                "size_bytes": absolute_path.stat().st_size,
+            }
+        )
+    return entries
+
+
+@dataclass
+class BundleVerificationResult:
+    """Outcome of evidence bundle integrity verification."""
+
+    bundle_root: Path
+    expected_files: int
+    verified_files: int
+    checked_at: str
+    missing_files: list[str] = field(default_factory=list)
+    modified_files: list[str] = field(default_factory=list)
+    unexpected_files: list[str] = field(default_factory=list)
+
+    @property
+    def is_valid(self) -> bool:
+        return not (self.missing_files or self.modified_files or self.unexpected_files)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "bundle_root": str(self.bundle_root),
+            "checked_at": self.checked_at,
+            "expected_files": self.expected_files,
+            "verified_files": self.verified_files,
+            "is_valid": self.is_valid,
+            "missing_files": self.missing_files,
+            "modified_files": self.modified_files,
+            "unexpected_files": self.unexpected_files,
+        }
 
 
 def generate_bundle(
@@ -258,4 +321,58 @@ def generate_bundle(
 
     (bundle_root / "summary.md").write_text("\n".join(lines), encoding="utf-8")
 
+    manifest_path = bundle_root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["integrity"] = {
+        "algorithm": "sha256",
+        "files": _build_integrity_entries(bundle_root),
+    }
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
     return bundle_root
+
+
+def verify_bundle(bundle_root: Path) -> BundleVerificationResult:
+    """Validate that an evidence bundle matches its manifest integrity block."""
+    manifest_path = bundle_root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    integrity = manifest.get("integrity")
+    if not integrity or integrity.get("algorithm") != "sha256":
+        raise ValueError("Bundle manifest does not contain a supported integrity block.")
+
+    expected_entries = integrity.get("files", [])
+    expected_map = {
+        entry["path"]: {
+            "sha256": entry["sha256"],
+            "size_bytes": entry["size_bytes"],
+        }
+        for entry in expected_entries
+    }
+    actual_paths = {
+        path.as_posix()
+        for path in _relative_bundle_files(bundle_root)
+        if path.as_posix() != "manifest.json"
+    }
+
+    missing_files = sorted(path for path in expected_map if path not in actual_paths)
+    unexpected_files = sorted(path for path in actual_paths if path not in expected_map)
+
+    modified_files: list[str] = []
+    verified_files = 0
+    for relative_path, expected in expected_map.items():
+        absolute_path = bundle_root / relative_path
+        if not absolute_path.exists():
+            continue
+        verified_files += 1
+        if absolute_path.stat().st_size != expected["size_bytes"] or _sha256_file(absolute_path) != expected["sha256"]:
+            modified_files.append(relative_path)
+
+    return BundleVerificationResult(
+        bundle_root=bundle_root,
+        expected_files=len(expected_map),
+        verified_files=verified_files,
+        checked_at=datetime.now(timezone.utc).isoformat(),
+        missing_files=missing_files,
+        modified_files=sorted(modified_files),
+        unexpected_files=unexpected_files,
+    )

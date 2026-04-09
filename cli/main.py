@@ -4,6 +4,8 @@ Vulnerability management CLI.
 Commands:
   check-sla       Report SLA breaches across all open findings
   generate-report Export findings in json, csv, or markdown format
+  evidence-bundle Build and verify tamper-evident evidence bundles
+  issue-sync      Export GitHub/JIRA remediation payloads
   lifecycle       Query and manage vulnerability lifecycle state transitions
   risk-acceptance Create, verify and apply signed risk acceptance records
 """
@@ -24,6 +26,7 @@ from vuln_management.lifecycle import (
     InvalidTransitionError,
     ALLOWED_TRANSITIONS,
 )
+from vuln_management.evidence_bundle import generate_bundle, verify_bundle
 from vuln_management.risk_acceptance import (
     RiskAcceptanceRecord,
     apply_risk_acceptance_to_finding,
@@ -31,7 +34,9 @@ from vuln_management.risk_acceptance import (
     find_expiring_records,
     verify_risk_acceptance_record,
 )
+from vuln_management.issue_sync import export_issue_sync_payloads
 from vuln_management.retest import generate_retest_diff_report, schedule_retest
+from vuln_management.tracker import VulnerabilityTracker
 
 
 def _parse_datetime_utc(raw_value: str) -> datetime:
@@ -97,6 +102,71 @@ def generate(findings_file: str, fmt: str, output: str) -> None:
     else:
         Path(output).write_text(report)
         click.echo(f"Report written to {output}")
+
+
+@cli.group("evidence-bundle")
+def evidence_bundle() -> None:
+    """Generate and verify tamper-evident evidence bundles."""
+
+
+@evidence_bundle.command("generate")
+@click.argument("findings_file", type=click.Path(exists=True))
+@click.option("--engagement-id", required=True, help="Engagement identifier for the bundle root.")
+@click.option("--output-dir", required=True, type=click.Path(file_okay=False), help="Directory where the bundle should be created.")
+@click.option("--client-name", default="Unknown Client", show_default=True, help="Client organization name for the summary.")
+@click.option("--assessor", default="k1N Security", show_default=True, help="Assessor name recorded in the manifest.")
+def evidence_bundle_generate(
+    findings_file: str,
+    engagement_id: str,
+    output_dir: str,
+    client_name: str,
+    assessor: str,
+) -> None:
+    """Generate a tamper-evident evidence bundle from findings JSON."""
+    raw = json.loads(Path(findings_file).read_text(encoding="utf-8"))
+    findings = [Finding(**f) for f in raw]
+    tracker = VulnerabilityTracker()
+    for finding in findings:
+        tracker.add(finding)
+    bundle_path = generate_bundle(
+        tracker=tracker,
+        output_dir=Path(output_dir),
+        engagement_id=engagement_id,
+        client_name=client_name,
+        assessor=assessor,
+    )
+    click.echo(f"Evidence bundle written to {bundle_path}")
+
+
+@evidence_bundle.command("verify")
+@click.argument("bundle_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--format", "fmt", default="text", type=click.Choice(["text", "json"]), show_default=True)
+def evidence_bundle_verify(bundle_dir: Path, fmt: str) -> None:
+    """Verify that a bundle still matches the manifest integrity metadata."""
+    try:
+        result = verify_bundle(bundle_dir)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    if fmt == "json":
+        click.echo(json.dumps(result.to_dict(), indent=2))
+    else:
+        status = "valid" if result.is_valid else "invalid"
+        click.echo(
+            f"Evidence bundle is {status}: expected={result.expected_files} verified={result.verified_files}"
+        )
+        for label, values in (
+            ("Missing", result.missing_files),
+            ("Modified", result.modified_files),
+            ("Unexpected", result.unexpected_files),
+        ):
+            if values:
+                click.echo(f"{label}:")
+                for value in values:
+                    click.echo(f"  - {value}")
+
+    if not result.is_valid:
+        sys.exit(1)
 
 
 @cli.group()
@@ -306,6 +376,61 @@ def retest_diff(baseline_file: str, candidate_file: str, fmt: str, output: str) 
 
     Path(output).write_text(payload, encoding="utf-8")
     click.echo(f"Retest diff report written to {output}")
+
+
+@cli.group("issue-sync")
+def issue_sync() -> None:
+    """Export remediation issues for GitHub or JIRA."""
+
+
+@issue_sync.command("export")
+@click.argument("findings_file", type=click.Path(exists=True))
+@click.option("--target", required=True, type=click.Choice(["github", "jira"]), help="Issue tracker target.")
+@click.option("--repo", default=None, help="GitHub owner/repo target.")
+@click.option("--project-key", default=None, help="JIRA project key.")
+@click.option("--assignee", "assignees", multiple=True, help="GitHub assignee (repeatable).")
+@click.option("--component", "components", multiple=True, help="JIRA component (repeatable).")
+@click.option("--issue-type", default="Task", show_default=True, help="JIRA issue type name.")
+@click.option("--milestone", type=int, default=None, help="Optional GitHub milestone number.")
+@click.option("--include-closed", is_flag=True, default=False, help="Include closed/accepted findings.")
+@click.option("--output", "-o", default="-", help="Output file path (default: stdout).")
+def issue_sync_export(
+    findings_file: str,
+    target: str,
+    repo: str | None,
+    project_key: str | None,
+    assignees: tuple[str, ...],
+    components: tuple[str, ...],
+    issue_type: str,
+    milestone: int | None,
+    include_closed: bool,
+    output: str,
+) -> None:
+    """Export tracker-native issue payloads without requiring network access."""
+    findings_raw = json.loads(Path(findings_file).read_text(encoding="utf-8"))
+    findings = [Finding(**item) for item in findings_raw]
+    try:
+        payload = export_issue_sync_payloads(
+            findings,
+            target=target,
+            repo=repo,
+            project_key=project_key,
+            assignees=assignees,
+            components=components,
+            issue_type=issue_type,
+            milestone=milestone,
+            only_open=not include_closed,
+        )
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    rendered = json.dumps(payload, indent=2)
+    if output == "-":
+        click.echo(rendered)
+        return
+
+    Path(output).write_text(rendered, encoding="utf-8")
+    click.echo(f"Issue sync export written to {output}")
 
 
 @cli.group("risk-acceptance")
