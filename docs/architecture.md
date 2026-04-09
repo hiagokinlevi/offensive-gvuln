@@ -40,6 +40,15 @@ CLOSED
 
 This provides auditable approvals and reduces the chance of ad-hoc, non-traceable risk acceptance decisions.
 
+### Retest Planning And Diff Reporting
+
+`retest.py` adds a verification layer after remediation:
+
+- `schedule_retest()` attaches a structured `RetestPlan` to a finding, records the lifecycle transition into `RETEST_SCHEDULED`, and forces teams to capture the target environment plus verification scope.
+- `generate_retest_diff_report()` compares baseline and candidate finding snapshots so teams can separate fixed findings, regressions, new exposure, and still-open debt before closing a remediation sprint.
+
+This closes the gap between "fix claimed" and "fix verified" while keeping the workflow JSON-native and easy to automate.
+
 ### Pentest Governance
 
 - **ScopeValidator**: Validates targets against exact hostnames, CIDR ranges, and wildcard patterns before assessment begins.

@@ -34,6 +34,14 @@ class RemediationRecord(BaseModel):
     note: str = ""
 
 
+class RetestPlan(BaseModel):
+    due_at: datetime
+    requested_by: str
+    environment: str
+    scope_summary: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 class Finding(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     title: str
@@ -45,6 +53,7 @@ class Finding(BaseModel):
     cve_id: Optional[str] = None
     discovered_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     remediation_records: list[RemediationRecord] = Field(default_factory=list)
+    retest_plan: Optional[RetestPlan] = None
 
     def is_open(self) -> bool:
         """Return True if finding requires active attention."""

@@ -22,4 +22,4 @@
 ## v0.4 — Risk Scoring
 - [x] CVSS v3.1 base score calculator (complete formula, roundup, severity ratings, vector string parser)
 - [x] Risk acceptance workflow with approver signatures
-- [ ] Retest scheduling and diff reporting
+- [x] Retest scheduling and diff reporting

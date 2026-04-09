@@ -1,6 +1,6 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "offensive-gvuln"
@@ -8,8 +8,18 @@ version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = ["pydantic>=2.0", "click>=8.0", "jinja2>=3.1", "tabulate>=0.9"]
 
+[project.scripts]
+gvuln = "offensive_gvuln_cli:main"
+
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "pytest-cov>=4.0"]
 
 [tool.pytest.ini_options]
 addopts = "--cov=vuln_management --cov=pentest_governance --cov-report=term-missing --cov-fail-under=70"
+
+[tool.setuptools]
+include-package-data = false
+py-modules = ["offensive_gvuln_cli"]
+
+[tool.setuptools.packages.find]
+include = ["cli*", "pentest_governance*", "vuln_management*"]

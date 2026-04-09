@@ -19,6 +19,7 @@ Security teams often lack standardized processes for tracking vulnerability reme
 - Produce executive and technical vulnerability reports
 - Monitor overdue remediations by severity tier
 - Operate signed risk acceptance workflows with approver traceability
+- Schedule verification retests and generate before/after diff reports
 
 ## Structure
 
@@ -53,6 +54,17 @@ python -m cli.main risk-acceptance create \
 
 python -m cli.main risk-acceptance verify risk-acceptance.json \
   --signing-key "$GVULN_APPROVER_SIGNING_KEY"
+
+# Schedule a retest after remediation and compare verification snapshots
+python -m cli.main retest schedule findings.json \
+  --id <finding-id-prefix> \
+  --due-at 2026-12-31T23:59:59Z \
+  --actor qa@example.com \
+  --environment staging \
+  --scope "Re-run authenticated and unauthenticated validation steps" \
+  --save
+
+python -m cli.main retest diff findings-before.json findings-after.json
 ```
 
 ## How to Contribute
@@ -65,6 +77,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 - v0.2: CVSS scoring integration, JIRA/GitHub Issues export
 - v0.3: Automated evidence packaging, PDF report generation
 - v0.4: Integration with Nuclei, Burp Suite, Nessus output formats
+- v0.5: Retest scheduling and outcome diff reporting
 
 ## License
 

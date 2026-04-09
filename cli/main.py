@@ -31,6 +31,7 @@ from vuln_management.risk_acceptance import (
     find_expiring_records,
     verify_risk_acceptance_record,
 )
+from vuln_management.retest import generate_retest_diff_report, schedule_retest
 
 
 def _parse_datetime_utc(raw_value: str) -> datetime:
@@ -216,6 +217,95 @@ def lifecycle_move(
             encoding="utf-8",
         )
         click.echo(f"  Saved:   {findings_file}")
+
+
+@cli.group()
+def retest() -> None:
+    """Plan verification work and compare retest snapshots."""
+
+
+@retest.command("schedule")
+@click.argument("findings_file", type=click.Path(exists=True))
+@click.option("--id", "finding_id", required=True, help="Finding ID (or prefix) to schedule.")
+@click.option("--due-at", required=True, help="Future ISO-8601 timestamp for the retest window.")
+@click.option("--actor", required=True, help="Operator requesting the retest.")
+@click.option("--environment", required=True, help="Environment to verify (prod, staging, etc.).")
+@click.option("--scope", "scope_summary", required=True, help="Verification scope summary.")
+@click.option("--note", default="", help="Optional lifecycle note override.")
+@click.option("--save", is_flag=True, default=False, help="Persist the updated finding to disk.")
+def retest_schedule(
+    findings_file: str,
+    finding_id: str,
+    due_at: str,
+    actor: str,
+    environment: str,
+    scope_summary: str,
+    note: str,
+    save: bool,
+) -> None:
+    """Attach a structured retest plan to a remediated finding."""
+    raw = json.loads(Path(findings_file).read_text(encoding="utf-8"))
+    findings = [Finding(**item) for item in raw]
+    matches = [finding for finding in findings if finding.id.startswith(finding_id)]
+
+    if not matches:
+        click.echo(f"No finding found with ID prefix: {finding_id}", err=True)
+        sys.exit(2)
+    if len(matches) > 1:
+        click.echo(
+            f"Ambiguous ID prefix '{finding_id}' matches {len(matches)} findings. Provide a longer prefix.",
+            err=True,
+        )
+        sys.exit(2)
+
+    try:
+        transition_name = schedule_retest(
+            matches[0],
+            due_at=_parse_datetime_utc(due_at),
+            actor=actor,
+            environment=environment,
+            scope_summary=scope_summary,
+            note=note,
+        )
+    except (ValueError, InvalidTransitionError) as exc:
+        click.echo(f"Retest scheduling error: {exc}", err=True)
+        sys.exit(1)
+
+    plan = matches[0].retest_plan
+    click.echo(f"Transition '{transition_name}' applied: finding={matches[0].id} status={matches[0].status.value}")
+    click.echo(f"  Due at:      {plan.due_at.isoformat()}")
+    click.echo(f"  Environment: {plan.environment}")
+    click.echo(f"  Scope:       {plan.scope_summary}")
+
+    if save:
+        Path(findings_file).write_text(
+            json.dumps([finding.model_dump(mode="json") for finding in findings], indent=2, default=str),
+            encoding="utf-8",
+        )
+        click.echo(f"Saved updated findings to {findings_file}")
+
+
+@retest.command("diff")
+@click.argument("baseline_file", type=click.Path(exists=True))
+@click.argument("candidate_file", type=click.Path(exists=True))
+@click.option("--format", "fmt", default="markdown", type=click.Choice(["markdown", "json"]), show_default=True)
+@click.option("--output", "-o", default="-", help="Output file path (default: stdout).")
+def retest_diff(baseline_file: str, candidate_file: str, fmt: str, output: str) -> None:
+    """Compare two findings snapshots and classify retest outcomes."""
+    baseline_raw = json.loads(Path(baseline_file).read_text(encoding="utf-8"))
+    candidate_raw = json.loads(Path(candidate_file).read_text(encoding="utf-8"))
+    report = generate_retest_diff_report(
+        [Finding(**item) for item in baseline_raw],
+        [Finding(**item) for item in candidate_raw],
+    )
+    payload = report.to_markdown() if fmt == "markdown" else json.dumps(report.to_dict(), indent=2)
+
+    if output == "-":
+        click.echo(payload)
+        return
+
+    Path(output).write_text(payload, encoding="utf-8")
+    click.echo(f"Retest diff report written to {output}")
 
 
 @cli.group("risk-acceptance")
