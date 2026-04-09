@@ -1,0 +1,25 @@
+# Roadmap
+
+## v0.1 — Core (current)
+- [x] Vulnerability finding model (Pydantic v2)
+- [x] State machine tracker with enforced transitions
+- [x] SLA engine (Critical=24h, High=7d, Medium=30d, Low=90d)
+- [x] Report generator (JSON, CSV, Markdown)
+- [x] Pentest scope validator (exact, CIDR, wildcard)
+- [x] Rules of Engagement template renderer
+- [x] Evidence collector with SHA-256 manifest
+
+## v0.2 — REST API
+- [ ] FastAPI REST service for findings CRUD
+- [ ] JWT authentication
+- [ ] WebSocket live SLA breach alerts
+
+## v0.3 — Integrations
+- [ ] JIRA issue sync adapter
+- [ ] GitHub Issues sync adapter
+- [ ] Slack/Teams SLA breach notifications
+
+## v0.4 — Risk Scoring
+- [x] CVSS v3.1 base score calculator (complete formula, roundup, severity ratings, vector string parser)
+- [ ] Risk acceptance workflow with approver signatures
+- [ ] Retest scheduling and diff reporting
