@@ -29,6 +29,17 @@ CLOSED
 
 `sla_engine.py` computes deadline and remaining time from `Finding.discovered_at`. `find_breached()` returns only open findings past their deadline — closed/risk-accepted findings are excluded from SLA monitoring.
 
+### Signed Risk Acceptance Workflow
+
+`risk_acceptance.py` introduces a governance-focused workflow for risk acceptance with:
+
+- deterministic HMAC-SHA256 signatures for integrity validation;
+- approver/requester separation enforcement;
+- expiration windows and expiring-record checks;
+- lifecycle integration that applies validated records directly to `RISK_ACCEPTED`.
+
+This provides auditable approvals and reduces the chance of ad-hoc, non-traceable risk acceptance decisions.
+
 ### Pentest Governance
 
 - **ScopeValidator**: Validates targets against exact hostnames, CIDR ranges, and wildcard patterns before assessment begins.

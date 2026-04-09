@@ -72,12 +72,12 @@ _PR_UNCHANGED_WEIGHTS = {
 
 _PR_CHANGED_WEIGHTS = {
     PrivilegesRequired.NONE: 0.85,
-    PrivilegesRequired.LOW:  0.50,
+    PrivilegesRequired.LOW:  0.68,
     PrivilegesRequired.HIGH: 0.50,
 }
 
 _UI_WEIGHTS = {
-    UserInteraction.NONE:     1.00,
+    UserInteraction.NONE:     0.85,
     UserInteraction.REQUIRED: 0.62,
 }
 

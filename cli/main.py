@@ -5,9 +5,12 @@ Commands:
   check-sla       Report SLA breaches across all open findings
   generate-report Export findings in json, csv, or markdown format
   lifecycle       Query and manage vulnerability lifecycle state transitions
+  risk-acceptance Create, verify and apply signed risk acceptance records
 """
 import json
+import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 import click
 from vuln_management.models import Finding, FindingStatus
@@ -21,11 +24,39 @@ from vuln_management.lifecycle import (
     InvalidTransitionError,
     ALLOWED_TRANSITIONS,
 )
+from vuln_management.risk_acceptance import (
+    RiskAcceptanceRecord,
+    apply_risk_acceptance_to_finding,
+    create_risk_acceptance_record,
+    find_expiring_records,
+    verify_risk_acceptance_record,
+)
+
+
+def _parse_datetime_utc(raw_value: str) -> datetime:
+    """Parseia timestamp ISO-8601 e normaliza para UTC."""
+    normalized = raw_value.strip()
+    if normalized.endswith("Z"):
+        normalized = f"{normalized[:-1]}+00:00"
+    parsed = datetime.fromisoformat(normalized)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _resolve_signing_key(signing_key: str | None) -> str:
+    """Resolve chave de assinatura por opção explícita ou variável de ambiente."""
+    resolved = (signing_key or os.getenv("GVULN_APPROVER_SIGNING_KEY", "")).strip()
+    if not resolved:
+        raise click.ClickException(
+            "Missing signing key. Use --signing-key or set GVULN_APPROVER_SIGNING_KEY."
+        )
+    return resolved
 
 
 @click.group()
 def cli() -> None:
-    """k1n Vulnerability Governance — lifecycle management toolkit."""
+    """Offensive GVuln toolkit — lifecycle and governance automation."""
 
 
 @cli.command()
@@ -185,6 +216,177 @@ def lifecycle_move(
             encoding="utf-8",
         )
         click.echo(f"  Saved:   {findings_file}")
+
+
+@cli.group("risk-acceptance")
+def risk_acceptance() -> None:
+    """Manage signed risk acceptance workflow records."""
+
+
+@risk_acceptance.command("create")
+@click.option("--finding-id", required=True, help="Finding ID that will be risk accepted.")
+@click.option("--requested-by", required=True, help="Requester identifier (email or username).")
+@click.option("--approved-by", required=True, help="Approver identifier (email or username).")
+@click.option("--reason", required=True, help="Business justification for risk acceptance.")
+@click.option(
+    "--expires-at",
+    required=True,
+    help="Expiration timestamp (ISO-8601), e.g. 2026-12-31T23:59:59Z.",
+)
+@click.option("--control", "controls", multiple=True, help="Compensating control (can be repeated).")
+@click.option("--policy-ref", default=None, help="Optional policy reference.")
+@click.option("--signing-key", default=None, help="Signing key or use GVULN_APPROVER_SIGNING_KEY.")
+@click.option("--output", "-o", default="-", help="Output file path (default: stdout).")
+def risk_acceptance_create(
+    finding_id: str,
+    requested_by: str,
+    approved_by: str,
+    reason: str,
+    expires_at: str,
+    controls: tuple[str, ...],
+    policy_ref: str | None,
+    signing_key: str | None,
+    output: str,
+) -> None:
+    """Create a signed risk acceptance record."""
+    key = _resolve_signing_key(signing_key)
+    try:
+        record = create_risk_acceptance_record(
+            finding_id=finding_id,
+            requested_by=requested_by,
+            approved_by=approved_by,
+            reason=reason,
+            expires_at=_parse_datetime_utc(expires_at),
+            signing_key=key,
+            compensating_controls=controls,
+            policy_reference=policy_ref,
+        )
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    payload = json.dumps(record.model_dump(mode="json"), indent=2)
+    if output == "-":
+        click.echo(payload)
+        return
+
+    Path(output).write_text(payload, encoding="utf-8")
+    click.echo(f"Risk acceptance record written to {output}")
+
+
+@risk_acceptance.command("verify")
+@click.argument("record_file", type=click.Path(exists=True))
+@click.option("--signing-key", default=None, help="Signing key or use GVULN_APPROVER_SIGNING_KEY.")
+@click.option("--reference-time", default=None, help="Optional ISO-8601 timestamp for expiry checks.")
+def risk_acceptance_verify(
+    record_file: str,
+    signing_key: str | None,
+    reference_time: str | None,
+) -> None:
+    """Verify signature and validity window of a risk acceptance record."""
+    key = _resolve_signing_key(signing_key)
+    raw = json.loads(Path(record_file).read_text(encoding="utf-8"))
+    record = RiskAcceptanceRecord(**raw)
+    reference = _parse_datetime_utc(reference_time) if reference_time else None
+    valid, reason = verify_risk_acceptance_record(record, signing_key=key, reference_time=reference)
+    if not valid:
+        click.echo(f"Risk acceptance record is invalid: {reason}", err=True)
+        sys.exit(1)
+
+    click.echo(f"Risk acceptance record is valid: {record.record_id}")
+    click.echo(f"  Finding:  {record.finding_id}")
+    click.echo(f"  Approver: {record.approved_by}")
+    click.echo(f"  Expires:  {record.expires_at.isoformat()}")
+
+
+@risk_acceptance.command("expiring")
+@click.argument("records_file", type=click.Path(exists=True))
+@click.option("--days", type=int, default=30, show_default=True, help="Window in days.")
+@click.option("--reference-time", default=None, help="Optional ISO-8601 timestamp for expiry checks.")
+def risk_acceptance_expiring(records_file: str, days: int, reference_time: str | None) -> None:
+    """List records that expire within N days."""
+    if days < 0:
+        raise click.ClickException("--days must be >= 0")
+
+    raw = json.loads(Path(records_file).read_text(encoding="utf-8"))
+    raw_records = raw if isinstance(raw, list) else [raw]
+    records = [RiskAcceptanceRecord(**item) for item in raw_records]
+    reference = _parse_datetime_utc(reference_time) if reference_time else None
+    expiring = find_expiring_records(records, days=days, reference_time=reference)
+
+    if not expiring:
+        click.echo("No risk acceptance records expiring in the selected window.")
+        return
+
+    click.echo(f"Expiring records ({len(expiring)}):")
+    for record in expiring:
+        click.echo(
+            f"  - {record.record_id} | finding={record.finding_id} | "
+            f"expires_at={record.expires_at.isoformat()}"
+        )
+
+
+@risk_acceptance.command("apply")
+@click.argument("findings_file", type=click.Path(exists=True))
+@click.option("--record-file", required=True, type=click.Path(exists=True), help="Signed record file.")
+@click.option("--id", "finding_id", required=True, help="Finding ID (or prefix) to apply acceptance.")
+@click.option("--actor", required=True, help="Operator applying the approved acceptance.")
+@click.option("--note", default="", help="Optional lifecycle note override.")
+@click.option("--signing-key", default=None, help="Signing key or use GVULN_APPROVER_SIGNING_KEY.")
+@click.option("--save", is_flag=True, default=False, help="Persist finding status update to file.")
+def risk_acceptance_apply(
+    findings_file: str,
+    record_file: str,
+    finding_id: str,
+    actor: str,
+    note: str,
+    signing_key: str | None,
+    save: bool,
+) -> None:
+    """Apply a verified risk acceptance record to a finding lifecycle."""
+    key = _resolve_signing_key(signing_key)
+    findings_raw = json.loads(Path(findings_file).read_text(encoding="utf-8"))
+    findings = [Finding(**item) for item in findings_raw]
+    matches = [f for f in findings if f.id.startswith(finding_id)]
+
+    if not matches:
+        click.echo(f"No finding found with ID prefix: {finding_id}", err=True)
+        sys.exit(2)
+    if len(matches) > 1:
+        click.echo(
+            f"Ambiguous ID prefix '{finding_id}' matches {len(matches)} findings. "
+            "Provide a longer prefix.",
+            err=True,
+        )
+        sys.exit(2)
+
+    record_raw = json.loads(Path(record_file).read_text(encoding="utf-8"))
+    record = RiskAcceptanceRecord(**record_raw)
+    finding = matches[0]
+
+    try:
+        transition_name = apply_risk_acceptance_to_finding(
+            finding,
+            record=record,
+            signing_key=key,
+            actor=actor,
+            note=note,
+        )
+    except ValueError as exc:
+        click.echo(f"Risk acceptance apply error: {exc}", err=True)
+        sys.exit(1)
+    except InvalidTransitionError as exc:
+        click.echo(f"Transition error: {exc}", err=True)
+        sys.exit(1)
+
+    click.echo(f"Transition '{transition_name}' applied: finding={finding.id} status={finding.status.value}")
+
+    if save:
+        updated = [f.model_dump(mode="json") for f in findings]
+        Path(findings_file).write_text(
+            json.dumps(updated, indent=2, default=str),
+            encoding="utf-8",
+        )
+        click.echo(f"Saved updated findings to {findings_file}")
 
 
 if __name__ == "__main__":

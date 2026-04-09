@@ -18,6 +18,7 @@ Security teams often lack standardized processes for tracking vulnerability reme
 - Collect and hash evidence for audit trails
 - Produce executive and technical vulnerability reports
 - Monitor overdue remediations by severity tier
+- Operate signed risk acceptance workflows with approver traceability
 
 ## Structure
 
@@ -39,6 +40,19 @@ python scripts/check_sla.py --findings findings.json
 
 # Generate a vulnerability report
 python scripts/generate_report.py --findings findings.json --format markdown --output report.md
+
+# Create and verify a signed risk acceptance record
+python -m cli.main risk-acceptance create \
+  --finding-id <finding-id> \
+  --requested-by analyst@example.com \
+  --approved-by manager@example.com \
+  --reason "Temporary business acceptance with compensating controls" \
+  --expires-at 2026-12-31T23:59:59Z \
+  --output risk-acceptance.json \
+  --signing-key "$GVULN_APPROVER_SIGNING_KEY"
+
+python -m cli.main risk-acceptance verify risk-acceptance.json \
+  --signing-key "$GVULN_APPROVER_SIGNING_KEY"
 ```
 
 ## How to Contribute
