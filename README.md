@@ -25,6 +25,7 @@ Security teams often lack standardized processes for tracking vulnerability reme
 - Export normalized GitHub and JIRA issue payloads for remediation tracking
 - Redact common credential material from offline remediation issue exports
 - Run an optional FastAPI findings CRUD service backed by the same JSON models
+- Require HS256 Bearer JWTs on the optional findings REST API when an API secret is configured
 
 ## Structure
 
@@ -110,8 +111,11 @@ gvuln notify-sla findings.json \
 
 # Run the optional findings CRUD REST API
 pip install -e ".[api]"
+export GVULN_API_JWT_SECRET="$(openssl rand -hex 32)"
 uvicorn "vuln_management.api:create_app" --factory --reload
 ```
+
+When `GVULN_API_JWT_SECRET` is set, `/findings` endpoints require an `Authorization: Bearer <jwt>` token signed with HS256 and a `findings:write` scope. `/health` stays unauthenticated for liveness checks.
 
 ## How to Contribute
 
@@ -121,6 +125,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 - v0.1: Core vulnerability models, SLA engine, scope validator
 - v0.2: FastAPI findings CRUD service
+- v0.2: HS256 JWT authentication for the FastAPI findings API
 - v0.2: CVSS scoring integration, JIRA/GitHub Issues export
 - v0.3: Automated evidence packaging, PDF report generation
 - v0.3: Tamper-evident evidence bundle verification

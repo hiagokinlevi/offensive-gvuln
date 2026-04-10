@@ -12,7 +12,7 @@
 
 ## v0.2 — REST API
 - [x] FastAPI REST service for findings CRUD
-- [ ] JWT authentication
+- [x] JWT authentication
 - [ ] WebSocket live SLA breach alerts
 
 ## v0.3 — Integrations

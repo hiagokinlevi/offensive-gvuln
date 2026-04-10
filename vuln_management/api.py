@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
 
+from vuln_management.api_auth import JWTAuthConfig, JWTAuthError, verify_jwt_token
 from vuln_management.models import Finding, FindingStatus, Severity
 
 
@@ -105,10 +107,14 @@ class JsonFindingStore:
         return finding
 
 
-def create_app(storage_path: str | Path = "findings-api.json"):
+def create_app(
+    storage_path: str | Path = "findings-api.json",
+    *,
+    jwt_secret: str | None = None,
+):
     """Create the FastAPI application for findings CRUD."""
     try:
-        from fastapi import FastAPI, HTTPException, Query
+        from fastapi import Depends, FastAPI, Header, HTTPException, Query
     except ModuleNotFoundError as exc:  # pragma: no cover - depends on optional extra
         raise RuntimeError(
             "FastAPI support requires the optional api extra: "
@@ -121,9 +127,25 @@ def create_app(storage_path: str | Path = "findings-api.json"):
         description="Defensive vulnerability findings CRUD API.",
     )
     store = JsonFindingStore(storage_path)
+    resolved_jwt_secret = (jwt_secret or os.getenv("GVULN_API_JWT_SECRET", "")).strip()
+    auth_config = JWTAuthConfig(
+        secret=resolved_jwt_secret,
+        required_scopes=("findings:write",),
+    )
 
     def _not_found(exc: KeyError) -> HTTPException:
         return HTTPException(status_code=404, detail=str(exc))
+
+    def _require_auth(authorization: str | None = Header(default=None)) -> dict[str, Any] | None:
+        if not resolved_jwt_secret:
+            return None
+        if not authorization or not authorization.lower().startswith("bearer "):
+            raise HTTPException(status_code=401, detail="Bearer JWT required")
+        token = authorization.split(" ", 1)[1].strip()
+        try:
+            return verify_jwt_token(token, auth_config)
+        except JWTAuthError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -133,25 +155,36 @@ def create_app(storage_path: str | Path = "findings-api.json"):
     def list_findings(
         status: FindingStatus | None = Query(default=None),
         open_only: bool = Query(default=False),
+        _claims: dict[str, Any] | None = Depends(_require_auth),
     ) -> list[Finding]:
         return store.list(status=status, open_only=open_only)
 
     @app.post("/findings", response_model=Finding, status_code=201)
-    def create_finding(finding: Finding) -> Finding:
+    def create_finding(
+        finding: Finding,
+        _claims: dict[str, Any] | None = Depends(_require_auth),
+    ) -> Finding:
         try:
             return store.create(finding)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.get("/findings/{finding_id}", response_model=Finding)
-    def get_finding(finding_id: str) -> Finding:
+    def get_finding(
+        finding_id: str,
+        _claims: dict[str, Any] | None = Depends(_require_auth),
+    ) -> Finding:
         try:
             return store.get(finding_id)
         except KeyError as exc:
             raise _not_found(exc) from exc
 
     @app.put("/findings/{finding_id}", response_model=Finding)
-    def replace_finding(finding_id: str, finding: Finding) -> Finding:
+    def replace_finding(
+        finding_id: str,
+        finding: Finding,
+        _claims: dict[str, Any] | None = Depends(_require_auth),
+    ) -> Finding:
         try:
             return store.replace(finding_id, finding)
         except KeyError as exc:
@@ -160,14 +193,21 @@ def create_app(storage_path: str | Path = "findings-api.json"):
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.patch("/findings/{finding_id}", response_model=Finding)
-    def patch_finding(finding_id: str, patch: FindingPatch) -> Finding:
+    def patch_finding(
+        finding_id: str,
+        patch: FindingPatch,
+        _claims: dict[str, Any] | None = Depends(_require_auth),
+    ) -> Finding:
         try:
             return store.patch(finding_id, patch)
         except KeyError as exc:
             raise _not_found(exc) from exc
 
     @app.delete("/findings/{finding_id}", status_code=204)
-    def delete_finding(finding_id: str) -> None:
+    def delete_finding(
+        finding_id: str,
+        _claims: dict[str, Any] | None = Depends(_require_auth),
+    ) -> None:
         try:
             store.delete(finding_id)
         except KeyError as exc:

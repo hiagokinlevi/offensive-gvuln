@@ -81,6 +81,7 @@ This keeps the repository offline-safe while still closing the handoff gap betwe
 
 - `JsonFindingStore` persists `Finding` records to a deterministic JSON array so the service can run without a database.
 - `create_app()` exposes health, list, create, get, replace, patch, and delete routes under `/findings`.
+- When `GVULN_API_JWT_SECRET` or an explicit `jwt_secret` is configured, every `/findings` route requires a Bearer JWT signed with HS256 and a `findings:write` scope; `/health` remains public for uptime checks.
 - FastAPI and Uvicorn live behind the `api` optional dependency group, keeping the default offline CLI install lean.
 
 This closes the first v0.2 REST service gap while preserving the repository's local-first workflow.
