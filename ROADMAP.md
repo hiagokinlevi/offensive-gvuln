@@ -18,6 +18,7 @@
 ## v0.3 — Integrations
 - [x] JIRA issue sync adapter
 - [x] GitHub Issues sync adapter
+- [x] Secret redaction for offline remediation issue exports
 - [x] Slack/Teams SLA breach notifications
 
 ## v0.4 — Risk Scoring

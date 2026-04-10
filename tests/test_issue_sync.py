@@ -11,6 +11,7 @@ from vuln_management.issue_sync import (
     build_github_issue_payload,
     build_jira_issue_payload,
     export_issue_sync_payloads,
+    redact_sensitive_text,
 )
 from vuln_management.models import Finding, FindingStatus, Severity
 
@@ -20,6 +21,8 @@ def _finding(
     finding_id: str = "finding-001",
     severity: Severity = Severity.HIGH,
     status: FindingStatus = FindingStatus.OPEN,
+    description: str = "Unsanitized input reaches the database query builder.",
+    affected_asset: str = "app.example.com/login",
     discovered_at: datetime = datetime(2026, 4, 1, tzinfo=timezone.utc),
 ) -> Finding:
     return Finding(
@@ -27,8 +30,8 @@ def _finding(
         title="SQL Injection in login flow",
         severity=severity,
         status=status,
-        description="Unsanitized input reaches the database query builder.",
-        affected_asset="app.example.com/login",
+        description=description,
+        affected_asset=affected_asset,
         cvss_score=8.8,
         cve_id="CVE-2026-1234",
         discovered_at=discovered_at,
@@ -48,6 +51,49 @@ def test_build_github_issue_payload_adds_security_metadata() -> None:
     assert payload["assignees"] == ["alice", "bob"]
     assert payload["milestone"] == 7
     assert "Finding Summary" in payload["body"]
+
+
+def test_build_github_issue_payload_redacts_sensitive_description_values() -> None:
+    payload = build_github_issue_payload(
+        _finding(
+            affected_asset="https://api.example.test/login?access_token=secret-token-value",
+            description=(
+                "Repro used password=hunter2 and Authorization: Bearer "
+                "eyJhbGciOiJIUzI1NiJ9.testtoken"
+            ),
+        )
+    ).to_dict()
+
+    assert "hunter2" not in payload["body"]
+    assert "secret-token-value" not in payload["body"]
+    assert "eyJhbGciOiJIUzI1NiJ9.testtoken" not in payload["body"]
+    assert "password=[REDACTED]" in payload["body"]
+    assert "access_token=[REDACTED]" in payload["body"]
+    assert "Bearer [REDACTED]" in payload["body"]
+
+
+def test_build_jira_issue_payload_redacts_private_key_blocks() -> None:
+    payload = build_jira_issue_payload(
+        _finding(
+            description=(
+                "Temporary debug output:\n"
+                "-----BEGIN PRIVATE KEY-----\n"
+                "abc123\n"
+                "-----END PRIVATE KEY-----"
+            )
+        )
+    ).to_dict(project_key="SEC")
+
+    description = payload["fields"]["description"]
+    assert "abc123" not in description
+    assert "[PRIVATE_KEY_REDACTED]" in description
+
+
+def test_redact_sensitive_text_redacts_aws_access_keys() -> None:
+    redacted = redact_sensitive_text("Leaked key AKIAIOSFODNN7EXAMPLE in request log")
+
+    assert "AKIAIOSFODNN7EXAMPLE" not in redacted
+    assert "[AWS_ACCESS_KEY_REDACTED]" in redacted
 
 
 def test_build_jira_issue_payload_maps_priority_and_due_date() -> None:

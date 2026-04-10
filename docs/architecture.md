@@ -70,6 +70,7 @@ This makes the bundle itself tamper-evident, not just the individual raw artifac
 
 - `build_github_issue_payload()` maps findings into GitHub-friendly titles, labels, assignees, and a Markdown body that preserves SLA and asset context.
 - `build_jira_issue_payload()` maps severity into JIRA priorities, carries due dates from the SLA engine, and preserves component metadata for queue routing.
+- `redact_sensitive_text()` removes common credential material from exported descriptions and affected assets, including password or token assignments, bearer/basic auth values, AWS access key IDs, and private key blocks.
 - `export_issue_sync_payloads()` sorts findings by urgency, filters closed work by default, and emits a deterministic JSON bundle that another automation layer can POST later.
 
 This keeps the repository offline-safe while still closing the handoff gap between discovery and ticketed remediation.

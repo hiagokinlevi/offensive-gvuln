@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import re
 from typing import Any
 
 from vuln_management.models import Finding, Severity
@@ -16,6 +17,27 @@ _SEVERITY_ORDER = {
     Severity.LOW: 3,
     Severity.INFO: 4,
 }
+
+_SENSITIVE_VALUE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(
+            r"(?i)\b(password|passwd|pwd|api[_-]?key|access[_-]?token|secret|client[_-]?secret)\s*[:=]\s*([^\s,;]+)"
+        ),
+        r"\1=[REDACTED]",
+    ),
+    (
+        re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{12,}"),
+        r"\1 [REDACTED]",
+    ),
+    (
+        re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b"),
+        "[AWS_ACCESS_KEY_REDACTED]",
+    ),
+    (
+        re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.DOTALL),
+        "[PRIVATE_KEY_REDACTED]",
+    ),
+)
 
 
 def _normalize_due_date(value: str | None) -> str | None:
@@ -60,15 +82,25 @@ def _jira_labels(finding: Finding) -> list[str]:
     return labels
 
 
+def redact_sensitive_text(value: str) -> str:
+    """Redact common credential material before findings leave the local workspace."""
+    redacted = value
+    for pattern, replacement in _SENSITIVE_VALUE_PATTERNS:
+        redacted = pattern.sub(replacement, redacted)
+    return redacted
+
+
 def _issue_body(finding: Finding) -> str:
     sla = compute_sla(finding)
+    affected_asset = redact_sensitive_text(finding.affected_asset)
+    description = redact_sensitive_text(finding.description)
     lines = [
         "## Finding Summary",
         "",
         f"- Finding ID: `{finding.id}`",
         f"- Severity: `{finding.severity.value}`",
         f"- Status: `{finding.status.value}`",
-        f"- Affected asset: `{finding.affected_asset}`",
+        f"- Affected asset: `{affected_asset}`",
     ]
     if finding.cve_id:
         lines.append(f"- CVE: `{finding.cve_id}`")
@@ -85,7 +117,7 @@ def _issue_body(finding: Finding) -> str:
             "",
             "## Description",
             "",
-            finding.description,
+            description,
             "",
             "## Remediation Workflow Notes",
             "",

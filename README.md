@@ -23,6 +23,7 @@ Security teams often lack standardized processes for tracking vulnerability reme
 - Operate signed risk acceptance workflows with approver traceability
 - Schedule verification retests and generate before/after diff reports
 - Export normalized GitHub and JIRA issue payloads for remediation tracking
+- Redact common credential material from offline remediation issue exports
 - Run an optional FastAPI findings CRUD service backed by the same JSON models
 
 ## Structure
@@ -89,6 +90,10 @@ gvuln issue-sync export findings.json \
   --project-key SEC \
   --component appsec \
   --output jira-issues.json
+
+# Issue export bodies redact common secrets before handoff
+# including password/token assignments, auth headers, AWS access keys,
+# and private key blocks copied into descriptions or affected assets.
 
 # Build a Slack or Teams SLA notification payload for offline review
 gvuln notify-sla findings.json \
