@@ -6,12 +6,12 @@ import hashlib
 import hmac
 import importlib.util
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
-from vuln_management.api import FindingPatch, JsonFindingStore, create_app
+from vuln_management.api import FindingPatch, JsonFindingStore, build_sla_alert_payload, create_app
 from vuln_management.api_auth import JWTAuthConfig, JWTAuthError, verify_jwt_token
 from vuln_management.models import Finding, FindingStatus, Severity
 
@@ -20,6 +20,7 @@ def _finding(
     finding_id: str = "finding-001",
     status: FindingStatus = FindingStatus.OPEN,
     severity: Severity = Severity.HIGH,
+    discovered_at: datetime | None = None,
 ) -> Finding:
     return Finding(
         id=finding_id,
@@ -28,6 +29,7 @@ def _finding(
         status=status,
         description="Unsanitized input reaches a query builder.",
         affected_asset="app.example.com/login",
+        discovered_at=discovered_at or datetime.now(timezone.utc),
     )
 
 
@@ -169,6 +171,23 @@ def test_create_app_requires_api_extra_when_fastapi_is_absent(tmp_path: Path) ->
         create_app(tmp_path / "findings.json")
 
 
+def test_sla_alert_payload_serializes_breached_findings() -> None:
+    breached = _finding(
+        "breached-001",
+        severity=Severity.HIGH,
+        discovered_at=datetime.now(timezone.utc) - timedelta(days=10),
+    )
+
+    payload = build_sla_alert_payload([breached])
+
+    assert payload["type"] == "sla_alert_snapshot"
+    assert payload["total_open"] == 1
+    assert payload["breach_count"] == 1
+    assert payload["breached"][0]["finding"]["id"] == "breached-001"
+    assert payload["breached"][0]["deadline"].endswith("+00:00")
+    assert payload["breached"][0]["remaining_hours"] < 0
+
+
 def test_findings_routes_require_jwt_when_secret_is_configured(tmp_path: Path) -> None:
     if importlib.util.find_spec("fastapi") is None:
         pytest.skip("FastAPI extra is not installed")
@@ -192,3 +211,55 @@ def test_findings_routes_require_jwt_when_secret_is_configured(tmp_path: Path) -
 
     assert response.status_code == 200
     assert response.json() == []
+
+
+def test_sla_alert_websocket_sends_snapshot_and_mutation_updates(tmp_path: Path) -> None:
+    if importlib.util.find_spec("fastapi") is None:
+        pytest.skip("FastAPI extra is not installed")
+
+    from fastapi.testclient import TestClient
+
+    app = create_app(tmp_path / "findings.json")
+    client = TestClient(app)
+    breached = _finding(
+        "breached-002",
+        severity=Severity.CRITICAL,
+        discovered_at=datetime.now(timezone.utc) - timedelta(days=2),
+    )
+
+    with client.websocket_connect("/sla/alerts") as websocket:
+        initial = websocket.receive_json()
+        assert initial["type"] == "sla_alert_snapshot"
+        assert initial["total_open"] == 0
+
+        response = client.post("/findings", json=breached.model_dump(mode="json"))
+
+        assert response.status_code == 201
+        update = websocket.receive_json()
+        assert update["breach_count"] == 1
+        assert update["critical_breach"][0]["finding"]["id"] == "breached-002"
+
+
+def test_sla_alert_websocket_honors_jwt_secret(tmp_path: Path) -> None:
+    if importlib.util.find_spec("fastapi") is None:
+        pytest.skip("FastAPI extra is not installed")
+
+    from fastapi.testclient import TestClient
+    from starlette.websockets import WebSocketDisconnect
+
+    app = create_app(tmp_path / "findings.json", jwt_secret="unit-test-secret")
+    client = TestClient(app)
+    token = _jwt(
+        {
+            "sub": "api-client",
+            "scope": "findings:write",
+            "exp": 2_000_000_000,
+        }
+    )
+
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect("/sla/alerts"):
+            pass
+
+    with client.websocket_connect(f"/sla/alerts?token={token}") as websocket:
+        assert websocket.receive_json()["type"] == "sla_alert_snapshot"

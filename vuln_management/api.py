@@ -1,4 +1,4 @@
-"""Optional FastAPI REST adapter for vulnerability findings CRUD."""
+"""Optional FastAPI REST and WebSocket adapter for vulnerability findings."""
 from __future__ import annotations
 
 import json
@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from vuln_management.api_auth import JWTAuthConfig, JWTAuthError, verify_jwt_token
 from vuln_management.models import Finding, FindingStatus, Severity
+from vuln_management.sla_report import FindingSLAStatus, SLAReport, build_sla_report
 
 
 class FindingPatch(BaseModel):
@@ -107,6 +108,56 @@ class JsonFindingStore:
         return finding
 
 
+def _serialize_sla_status(status: FindingSLAStatus) -> dict[str, Any]:
+    """Return a JSON-safe SLA status for WebSocket alert payloads."""
+    return {
+        "finding": status.finding.model_dump(mode="json"),
+        "has_sla": status.has_sla,
+        "elapsed_hours": status.elapsed_hours,
+        "window_hours": status.window_hours,
+        "deadline": status.deadline.isoformat() if status.deadline else None,
+        "remaining_hours": status.remaining_hours,
+        "elapsed_pct": status.elapsed_pct,
+        "escalation": status.escalation,
+    }
+
+
+def build_sla_alert_payload(findings: list[Finding]) -> dict[str, Any]:
+    """Build a deterministic SLA alert snapshot for WebSocket clients."""
+    report: SLAReport = build_sla_report(findings)
+    return {
+        "type": "sla_alert_snapshot",
+        "generated_at": report.generated_at.isoformat(),
+        "total_open": report.total_open,
+        "breach_count": report.breach_count,
+        "compliance_rate": report.compliance_rate,
+        "critical_breach": [_serialize_sla_status(status) for status in report.critical_breach],
+        "breached": [_serialize_sla_status(status) for status in report.breached],
+        "warning": [_serialize_sla_status(status) for status in report.warning],
+    }
+
+
+class SLAAlertHub:
+    """Track connected WebSocket clients and publish SLA snapshots."""
+
+    def __init__(self) -> None:
+        self._clients: set[Any] = set()
+
+    async def connect(self, websocket: Any) -> None:
+        await websocket.accept()
+        self._clients.add(websocket)
+
+    def disconnect(self, websocket: Any) -> None:
+        self._clients.discard(websocket)
+
+    async def broadcast(self, payload: dict[str, Any]) -> None:
+        for websocket in list(self._clients):
+            try:
+                await websocket.send_json(payload)
+            except Exception:
+                self.disconnect(websocket)
+
+
 def create_app(
     storage_path: str | Path = "findings-api.json",
     *,
@@ -114,7 +165,7 @@ def create_app(
 ):
     """Create the FastAPI application for findings CRUD."""
     try:
-        from fastapi import Depends, FastAPI, Header, HTTPException, Query
+        from fastapi import Depends, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
     except ModuleNotFoundError as exc:  # pragma: no cover - depends on optional extra
         raise RuntimeError(
             "FastAPI support requires the optional api extra: "
@@ -127,6 +178,7 @@ def create_app(
         description="Defensive vulnerability findings CRUD API.",
     )
     store = JsonFindingStore(storage_path)
+    alert_hub = SLAAlertHub()
     resolved_jwt_secret = (jwt_secret or os.getenv("GVULN_API_JWT_SECRET", "")).strip()
     auth_config = JWTAuthConfig(
         secret=resolved_jwt_secret,
@@ -147,6 +199,27 @@ def create_app(
         except JWTAuthError as exc:
             raise HTTPException(status_code=401, detail=str(exc)) from exc
 
+    def _require_websocket_auth(websocket: WebSocket) -> bool:
+        if not resolved_jwt_secret:
+            return True
+        token = websocket.query_params.get("token", "").strip()
+        header = websocket.headers.get("authorization", "")
+        if not token and header.lower().startswith("bearer "):
+            token = header.split(" ", 1)[1].strip()
+        if not token:
+            return False
+        try:
+            verify_jwt_token(token, auth_config)
+        except JWTAuthError:
+            return False
+        return True
+
+    def _sla_payload() -> dict[str, Any]:
+        return build_sla_alert_payload(store.list(open_only=True))
+
+    async def _broadcast_sla_alerts() -> None:
+        await alert_hub.broadcast(_sla_payload())
+
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok", "storage_path": str(store.path)}
@@ -160,12 +233,14 @@ def create_app(
         return store.list(status=status, open_only=open_only)
 
     @app.post("/findings", response_model=Finding, status_code=201)
-    def create_finding(
+    async def create_finding(
         finding: Finding,
         _claims: dict[str, Any] | None = Depends(_require_auth),
     ) -> Finding:
         try:
-            return store.create(finding)
+            created = store.create(finding)
+            await _broadcast_sla_alerts()
+            return created
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -180,37 +255,56 @@ def create_app(
             raise _not_found(exc) from exc
 
     @app.put("/findings/{finding_id}", response_model=Finding)
-    def replace_finding(
+    async def replace_finding(
         finding_id: str,
         finding: Finding,
         _claims: dict[str, Any] | None = Depends(_require_auth),
     ) -> Finding:
         try:
-            return store.replace(finding_id, finding)
+            replaced = store.replace(finding_id, finding)
+            await _broadcast_sla_alerts()
+            return replaced
         except KeyError as exc:
             raise _not_found(exc) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.patch("/findings/{finding_id}", response_model=Finding)
-    def patch_finding(
+    async def patch_finding(
         finding_id: str,
         patch: FindingPatch,
         _claims: dict[str, Any] | None = Depends(_require_auth),
     ) -> Finding:
         try:
-            return store.patch(finding_id, patch)
+            patched = store.patch(finding_id, patch)
+            await _broadcast_sla_alerts()
+            return patched
         except KeyError as exc:
             raise _not_found(exc) from exc
 
     @app.delete("/findings/{finding_id}", status_code=204)
-    def delete_finding(
+    async def delete_finding(
         finding_id: str,
         _claims: dict[str, Any] | None = Depends(_require_auth),
     ) -> None:
         try:
             store.delete(finding_id)
+            await _broadcast_sla_alerts()
         except KeyError as exc:
             raise _not_found(exc) from exc
+
+    @app.websocket("/sla/alerts")
+    async def sla_alerts(websocket: WebSocket) -> None:
+        if not _require_websocket_auth(websocket):
+            await websocket.close(code=1008)
+            return
+
+        await alert_hub.connect(websocket)
+        try:
+            await websocket.send_json(_sla_payload())
+            while True:
+                await websocket.receive_text()
+        except WebSocketDisconnect:
+            alert_hub.disconnect(websocket)
 
     return app

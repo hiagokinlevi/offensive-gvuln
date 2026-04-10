@@ -13,7 +13,7 @@
 ## v0.2 — REST API
 - [x] FastAPI REST service for findings CRUD
 - [x] JWT authentication
-- [ ] WebSocket live SLA breach alerts
+- [x] WebSocket live SLA breach alerts
 
 ## v0.3 — Integrations
 - [x] JIRA issue sync adapter

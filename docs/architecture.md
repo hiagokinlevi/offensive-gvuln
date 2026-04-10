@@ -82,9 +82,12 @@ This keeps the repository offline-safe while still closing the handoff gap betwe
 - `JsonFindingStore` persists `Finding` records to a deterministic JSON array so the service can run without a database.
 - `create_app()` exposes health, list, create, get, replace, patch, and delete routes under `/findings`.
 - When `GVULN_API_JWT_SECRET` or an explicit `jwt_secret` is configured, every `/findings` route requires a Bearer JWT signed with HS256 and a `findings:write` scope; `/health` remains public for uptime checks.
+- `build_sla_alert_payload()` reuses the same `SLAReport` calculation as the offline CLI and serializes warning, breached, and critical-breach findings into a JSON-safe snapshot for connected alert consumers.
+- `/sla/alerts` opens a WebSocket stream for live SLA breach snapshots. Clients receive the current snapshot at connect time and a fresh snapshot after create, replace, patch, or delete operations mutate the JSON finding store.
+- When JWT auth is configured, WebSocket clients must send the same HS256 token through the `Authorization: Bearer <jwt>` header or a `token` query parameter.
 - FastAPI and Uvicorn live behind the `api` optional dependency group, keeping the default offline CLI install lean.
 
-This closes the first v0.2 REST service gap while preserving the repository's local-first workflow.
+This closes the v0.2 REST service and live SLA alerting gaps while preserving the repository's local-first workflow.
 
 ### SLA Notification Payloads
 

@@ -15,6 +15,6 @@
 ## Advanced
 1. Extend the state machine with a custom transition (e.g., REMEDIATED → VERIFIED)
 2. Run the optional FastAPI findings API with `GVULN_API_JWT_SECRET` set and call it with an HS256 Bearer JWT that has the `findings:write` scope
-3. Integrate with a JIRA project via the REST API
-4. Add CVSS v3.1 score calculation to the SLA prioritization model
+3. Subscribe to `/sla/alerts` with the same JWT and confirm that creating an overdue finding emits a fresh SLA breach snapshot
+4. Integrate with a JIRA project via the REST API
 5. Wire `gvuln notify-sla` into a scheduled workflow that posts only warning-or-higher findings
