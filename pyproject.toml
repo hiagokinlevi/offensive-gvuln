@@ -13,6 +13,7 @@ gvuln = "offensive_gvuln_cli:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "pytest-cov>=4.0"]
+api = ["fastapi>=0.110", "uvicorn>=0.29"]
 
 [tool.pytest.ini_options]
 addopts = "--cov=vuln_management --cov=pentest_governance --cov-report=term-missing --cov-fail-under=70"

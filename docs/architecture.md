@@ -74,6 +74,16 @@ This makes the bundle itself tamper-evident, not just the individual raw artifac
 
 This keeps the repository offline-safe while still closing the handoff gap between discovery and ticketed remediation.
 
+### Optional REST API
+
+`api.py` provides a FastAPI application factory for teams that want a small service boundary around the same JSON-native finding model:
+
+- `JsonFindingStore` persists `Finding` records to a deterministic JSON array so the service can run without a database.
+- `create_app()` exposes health, list, create, get, replace, patch, and delete routes under `/findings`.
+- FastAPI and Uvicorn live behind the `api` optional dependency group, keeping the default offline CLI install lean.
+
+This closes the first v0.2 REST service gap while preserving the repository's local-first workflow.
+
 ### SLA Notification Payloads
 
 `sla_notifications.py` converts the structured `SLAReport` output into webhook-safe Slack and Microsoft Teams payloads:

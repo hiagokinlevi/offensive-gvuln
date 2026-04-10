@@ -23,6 +23,7 @@ Security teams often lack standardized processes for tracking vulnerability reme
 - Operate signed risk acceptance workflows with approver traceability
 - Schedule verification retests and generate before/after diff reports
 - Export normalized GitHub and JIRA issue payloads for remediation tracking
+- Run an optional FastAPI findings CRUD service backed by the same JSON models
 
 ## Structure
 
@@ -101,6 +102,10 @@ gvuln notify-sla findings.json \
   --channel teams \
   --minimum-tier warning \
   --webhook-url "$GVULN_TEAMS_WEBHOOK_URL"
+
+# Run the optional findings CRUD REST API
+pip install -e ".[api]"
+uvicorn "vuln_management.api:create_app" --factory --reload
 ```
 
 ## How to Contribute
@@ -110,6 +115,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 ## Roadmap
 
 - v0.1: Core vulnerability models, SLA engine, scope validator
+- v0.2: FastAPI findings CRUD service
 - v0.2: CVSS scoring integration, JIRA/GitHub Issues export
 - v0.3: Automated evidence packaging, PDF report generation
 - v0.3: Tamper-evident evidence bundle verification

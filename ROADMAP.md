@@ -11,7 +11,7 @@
 - [x] Tamper-evident evidence bundle verification for delivery handoff
 
 ## v0.2 — REST API
-- [ ] FastAPI REST service for findings CRUD
+- [x] FastAPI REST service for findings CRUD
 - [ ] JWT authentication
 - [ ] WebSocket live SLA breach alerts
 
