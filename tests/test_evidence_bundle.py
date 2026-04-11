@@ -160,6 +160,29 @@ class TestBundleStructure(unittest.TestCase):
             summary = (bundle / "summary.md").read_text()
         self.assertIn("SQL Injection in Login Form", summary)
 
+    def test_bundle_rejects_path_traversal_in_engagement_id(self):
+        tracker = _tracker(_finding())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertRaisesRegex(ValueError, "engagement_id"):
+                generate_bundle(
+                    tracker=tracker,
+                    output_dir=Path(tmpdir),
+                    engagement_id="../escape",
+                )
+
+    def test_bundle_rejects_path_traversal_in_finding_id(self):
+        tracker = _tracker(_finding())
+        tracker.all()[0].id = "../escape"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertRaisesRegex(ValueError, "finding.id"):
+                generate_bundle(
+                    tracker=tracker,
+                    output_dir=Path(tmpdir),
+                    engagement_id="SAFE-001",
+                )
+
 
 # ---------------------------------------------------------------------------
 # SLA status in bundle

@@ -52,6 +52,20 @@ _SEVERITY_ORDER = {
 }
 
 
+def _safe_bundle_component(value: str, *, label: str) -> str:
+    """Restrict bundle-controlled path components to plain file/directory names."""
+    normalized = value.strip()
+    candidate = Path(normalized)
+    if (
+        not normalized
+        or candidate.name != normalized
+        or normalized in {".", ".."}
+        or any(part in {".", ".."} for part in candidate.parts)
+    ):
+        raise ValueError(f"{label} must be a simple path component without traversal sequences")
+    return normalized
+
+
 def _finding_to_dict(finding: Finding) -> dict:
     """Serialize a Finding to a dict suitable for JSON output."""
     return {
@@ -177,11 +191,16 @@ def generate_bundle(
     Returns:
         Path to the bundle root directory (output_dir/<engagement_id>).
     """
-    bundle_root = output_dir / engagement_id
+    safe_engagement_id = _safe_bundle_component(engagement_id, label="engagement_id")
+    bundle_root = output_dir / safe_engagement_id
     findings_dir = bundle_root / "findings"
     findings_dir.mkdir(parents=True, exist_ok=True)
 
     all_findings = tracker.all()
+    safe_finding_files = {
+        finding.id: f"{_safe_bundle_component(finding.id, label='finding.id')}.json"
+        for finding in all_findings
+    }
     generated_at = datetime.now(timezone.utc).isoformat()
 
     # Sort by severity then by discovered_at
@@ -200,7 +219,7 @@ def generate_bundle(
         status_counts[f.status.value] += 1
 
     manifest = {
-        "engagement_id":   engagement_id,
+        "engagement_id":   safe_engagement_id,
         "client_name":     client_name,
         "assessor":        assessor,
         "generated_at":    generated_at,
@@ -216,7 +235,7 @@ def generate_bundle(
                 "status":        f.status.value,
                 "affected_asset": f.affected_asset,
                 "is_open":       f.is_open(),
-                "file":          f"findings/{f.id}.json",
+                "file":          f"findings/{safe_finding_files[f.id]}",
             }
             for f in sorted_findings
         ],
@@ -229,7 +248,7 @@ def generate_bundle(
     # findings/<id>.json — per-finding detail
     # -----------------------------------------------------------------------
     for finding in all_findings:
-        finding_path = findings_dir / f"{finding.id}.json"
+        finding_path = findings_dir / safe_finding_files[finding.id]
         finding_path.write_text(
             json.dumps(_finding_to_dict(finding), indent=2), encoding="utf-8"
         )
