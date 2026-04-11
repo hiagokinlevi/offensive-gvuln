@@ -162,6 +162,8 @@ def create_app(
     storage_path: str | Path = "findings-api.json",
     *,
     jwt_secret: str | None = None,
+    jwt_issuer: str | None = None,
+    jwt_audience: str | None = None,
 ):
     """Create the FastAPI application for findings CRUD."""
     try:
@@ -180,8 +182,12 @@ def create_app(
     store = JsonFindingStore(storage_path)
     alert_hub = SLAAlertHub()
     resolved_jwt_secret = (jwt_secret or os.getenv("GVULN_API_JWT_SECRET", "")).strip()
+    resolved_jwt_issuer = (jwt_issuer or os.getenv("GVULN_API_JWT_ISSUER", "")).strip() or None
+    resolved_jwt_audience = (jwt_audience or os.getenv("GVULN_API_JWT_AUDIENCE", "")).strip() or None
     auth_config = JWTAuthConfig(
         secret=resolved_jwt_secret,
+        audience=resolved_jwt_audience,
+        issuer=resolved_jwt_issuer,
         required_scopes=("findings:write",),
     )
 

@@ -161,6 +161,59 @@ def test_verify_hs256_jwt_requires_expiration() -> None:
         )
 
 
+def test_verify_hs256_jwt_enforces_issuer_and_audience() -> None:
+    now = datetime.fromtimestamp(1_800_000_000, tz=timezone.utc)
+    config = JWTAuthConfig(
+        secret="unit-test-secret",
+        issuer="cyber-port",
+        audience="offensive-gvuln-api",
+        required_scopes=("findings:write",),
+    )
+    valid_token = _jwt(
+        {
+            "sub": "api-client",
+            "scope": "findings:write",
+            "iss": "cyber-port",
+            "aud": ["offensive-gvuln-api", "ops-dashboard"],
+            "exp": 2_000_000_000,
+        }
+    )
+
+    claims = verify_jwt_token(valid_token, config, now=now)
+
+    assert claims["iss"] == "cyber-port"
+
+    with pytest.raises(JWTAuthError, match="issuer"):
+        verify_jwt_token(
+            _jwt(
+                {
+                    "sub": "api-client",
+                    "scope": "findings:write",
+                    "iss": "staging",
+                    "aud": "offensive-gvuln-api",
+                    "exp": 2_000_000_000,
+                }
+            ),
+            config,
+            now=now,
+        )
+
+    with pytest.raises(JWTAuthError, match="audience"):
+        verify_jwt_token(
+            _jwt(
+                {
+                    "sub": "api-client",
+                    "scope": "findings:write",
+                    "iss": "cyber-port",
+                    "aud": "another-service",
+                    "exp": 2_000_000_000,
+                }
+            ),
+            config,
+            now=now,
+        )
+
+
 def test_create_app_requires_api_extra_when_fastapi_is_absent(tmp_path: Path) -> None:
     if importlib.util.find_spec("fastapi") is not None:
         app = create_app(tmp_path / "findings.json")
@@ -211,6 +264,42 @@ def test_findings_routes_require_jwt_when_secret_is_configured(tmp_path: Path) -
 
     assert response.status_code == 200
     assert response.json() == []
+
+
+def test_findings_routes_enforce_optional_jwt_issuer_and_audience(tmp_path: Path) -> None:
+    if importlib.util.find_spec("fastapi") is None:
+        pytest.skip("FastAPI extra is not installed")
+
+    from fastapi.testclient import TestClient
+
+    app = create_app(
+        tmp_path / "findings.json",
+        jwt_secret="unit-test-secret",
+        jwt_issuer="cyber-port",
+        jwt_audience="offensive-gvuln-api",
+    )
+    client = TestClient(app)
+    valid_token = _jwt(
+        {
+            "sub": "api-client",
+            "scope": "findings:write",
+            "iss": "cyber-port",
+            "aud": "offensive-gvuln-api",
+            "exp": 2_000_000_000,
+        }
+    )
+    wrong_audience = _jwt(
+        {
+            "sub": "api-client",
+            "scope": "findings:write",
+            "iss": "cyber-port",
+            "aud": "ops-dashboard",
+            "exp": 2_000_000_000,
+        }
+    )
+
+    assert client.get("/findings", headers={"Authorization": f"Bearer {valid_token}"}).status_code == 200
+    assert client.get("/findings", headers={"Authorization": f"Bearer {wrong_audience}"}).status_code == 401
 
 
 def test_sla_alert_websocket_sends_snapshot_and_mutation_updates(tmp_path: Path) -> None:

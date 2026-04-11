@@ -115,6 +115,8 @@ gvuln notify-sla findings.json \
 # Run the optional findings CRUD REST API
 pip install -e ".[api]"
 export GVULN_API_JWT_SECRET="$(openssl rand -hex 32)"
+export GVULN_API_JWT_ISSUER="cyber-port"
+export GVULN_API_JWT_AUDIENCE="offensive-gvuln-api"
 uvicorn "vuln_management.api:create_app" --factory --reload
 
 # Subscribe to SLA alert snapshots and mutation updates
@@ -124,7 +126,7 @@ uvicorn "vuln_management.api:create_app" --factory --reload
 wscat -c "ws://127.0.0.1:8000/sla/alerts?token=<jwt>"
 ```
 
-When `GVULN_API_JWT_SECRET` is set, `/findings` endpoints require an `Authorization: Bearer <jwt>` token signed with HS256 and a `findings:write` scope. `/sla/alerts` accepts the same token through the `Authorization` header or a `token` query parameter for WebSocket clients. `/health` stays unauthenticated for liveness checks.
+When `GVULN_API_JWT_SECRET` is set, `/findings` endpoints require an `Authorization: Bearer <jwt>` token signed with HS256 and a `findings:write` scope. Set `GVULN_API_JWT_ISSUER` and `GVULN_API_JWT_AUDIENCE` to pin production tokens to a trusted issuer and service audience. `/sla/alerts` accepts the same token through the `Authorization` header or a `token` query parameter for WebSocket clients. `/health` stays unauthenticated for liveness checks.
 
 ## How to Contribute
 
