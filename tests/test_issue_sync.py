@@ -96,6 +96,21 @@ def test_redact_sensitive_text_redacts_aws_access_keys() -> None:
     assert "[AWS_ACCESS_KEY_REDACTED]" in redacted
 
 
+def test_redact_sensitive_text_redacts_prefixed_secret_field_names() -> None:
+    redacted = redact_sensitive_text(
+        "aws_secret_access_key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY "
+        "aws_session_token=token-12345 "
+        "slack_webhook_url=https://hooks.slack.com/services/T000/B000/SECRET"
+    )
+
+    assert "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" not in redacted
+    assert "token-12345" not in redacted
+    assert "https://hooks.slack.com/services/T000/B000/SECRET" not in redacted
+    assert "aws_secret_access_key=[REDACTED]" in redacted
+    assert "aws_session_token=[REDACTED]" in redacted
+    assert "slack_webhook_url=[REDACTED]" in redacted
+
+
 def test_build_jira_issue_payload_maps_priority_and_due_date() -> None:
     payload = build_jira_issue_payload(
         _finding(severity=Severity.MEDIUM),

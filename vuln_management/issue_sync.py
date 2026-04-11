@@ -21,7 +21,7 @@ _SEVERITY_ORDER = {
 _SENSITIVE_VALUE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (
         re.compile(
-            r"(?i)\b(password|passwd|pwd|api[_-]?key|access[_-]?token|secret|client[_-]?secret)\s*[:=]\s*([^\s,;]+)"
+            r"(?i)\b((?:[a-z0-9][a-z0-9._-]*?)?(?:password|passwd|pwd|api[_-]?key|access[_-]?token|refresh[_-]?token|session[_-]?token|webhook[_-]?url|secret|client[_-]?secret|private[_-]?key)[a-z0-9._-]*)\s*[:=]\s*([^\s,;]+)"
         ),
         r"\1=[REDACTED]",
     ),
