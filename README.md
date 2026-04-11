@@ -105,6 +105,8 @@ gvuln notify-sla findings.json \
   --output slack-payload.json
 
 # Send a live webhook notification once the payload looks correct
+# Live delivery only accepts public HTTPS webhook endpoints and rejects
+# localhost, non-public IP literals, and embedded URL credentials.
 gvuln notify-sla findings.json \
   --channel teams \
   --minimum-tier warning \

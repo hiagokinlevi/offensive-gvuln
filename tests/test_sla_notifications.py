@@ -5,10 +5,11 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from vuln_management.models import Finding, FindingStatus, Severity
-from vuln_management.sla_notifications import build_notification_payload
+from vuln_management.sla_notifications import build_notification_payload, send_webhook_notification
 from vuln_management.sla_report import build_sla_report
 
 
@@ -91,6 +92,95 @@ class TestBuildNotificationPayload:
         assert payload.body["@type"] == "MessageCard"
         assert payload.body["sections"][0]["facts"][-1]["value"] == "warning"
         assert "warn-1" in payload.body["sections"][0]["text"]
+
+
+class TestSendWebhookNotification:
+    def test_accepts_public_https_webhook(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        report = build_sla_report(
+            [
+                _finding(
+                    finding_id="crit-1",
+                    title="Critical overdue issue",
+                    severity=Severity.CRITICAL,
+                    hours_ago=60,
+                ),
+            ],
+            now=_NOW,
+        )
+        payload = build_notification_payload(report, channel="slack")
+
+        class _Response:
+            status = 202
+
+            def __enter__(self) -> "_Response":
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+            def getcode(self) -> int:
+                return self.status
+
+        captured: dict[str, object] = {}
+
+        def _fake_urlopen(req, timeout: int):
+            captured["url"] = req.full_url
+            captured["timeout"] = timeout
+            return _Response()
+
+        monkeypatch.setattr("vuln_management.sla_notifications.request.urlopen", _fake_urlopen)
+
+        status = send_webhook_notification(
+            "https://hooks.slack.com/services/T000/B000/example",
+            payload,
+            timeout=3,
+        )
+
+        assert status == 202
+        assert captured == {
+            "url": "https://hooks.slack.com/services/T000/B000/example",
+            "timeout": 3,
+        }
+
+    @pytest.mark.parametrize(
+        ("webhook_url", "error_fragment"),
+        [
+            ("", "must not be empty"),
+            ("http://hooks.slack.com/services/T000/B000/example", "must use https"),
+            ("file:///tmp/webhook.json", "must use https"),
+            ("https://user:pass@hooks.slack.com/services/T000/B000/example", "embedded credentials"),
+            ("https://localhost/webhook", "localhost"),
+            ("https://127.0.0.1/webhook", "non-public IP"),
+            ("https://[::1]/webhook", "non-public IP"),
+            ("https://10.0.0.15/webhook", "non-public IP"),
+        ],
+    )
+    def test_rejects_unsafe_webhook_urls(
+        self,
+        webhook_url: str,
+        error_fragment: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        report = build_sla_report(
+            [
+                _finding(
+                    finding_id="warn-1",
+                    title="Near breach",
+                    severity=Severity.HIGH,
+                    hours_ago=100,
+                ),
+            ],
+            now=_NOW,
+        )
+        payload = build_notification_payload(report, channel="teams")
+
+        def _unexpected_urlopen(*args, **kwargs):
+            raise AssertionError("urlopen should not be reached for rejected webhook URLs")
+
+        monkeypatch.setattr("vuln_management.sla_notifications.request.urlopen", _unexpected_urlopen)
+
+        with pytest.raises(ValueError, match=error_fragment):
+            send_webhook_notification(webhook_url, payload)
 
 
 class TestNotifySlaCli:

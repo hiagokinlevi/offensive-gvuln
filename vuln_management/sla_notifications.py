@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import ipaddress
 import json
 from typing import Any
-from urllib import request
+from urllib import parse, request
 
 from vuln_management.sla_report import FindingSLAStatus, SLAReport
 
@@ -23,6 +24,33 @@ class NotificationPayload:
     channel: str
     summary: str
     body: dict[str, Any]
+
+
+def _validate_webhook_url(webhook_url: str) -> str:
+    normalized_url = webhook_url.strip()
+    if not normalized_url:
+        raise ValueError("webhook_url must not be empty")
+
+    parsed = parse.urlsplit(normalized_url)
+    if parsed.scheme.lower() != "https":
+        raise ValueError("webhook_url must use https")
+    if not parsed.netloc or not parsed.hostname:
+        raise ValueError("webhook_url must include a hostname")
+    if parsed.username or parsed.password:
+        raise ValueError("webhook_url must not include embedded credentials")
+
+    hostname = parsed.hostname.strip().rstrip(".")
+    if hostname.lower() == "localhost":
+        raise ValueError("webhook_url must not target localhost")
+
+    try:
+        ip_address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return normalized_url
+
+    if not ip_address.is_global:
+        raise ValueError("webhook_url must not target loopback or non-public IP addresses")
+    return normalized_url
 
 
 def _selected_statuses(report: SLAReport, minimum_tier: str) -> list[FindingSLAStatus]:
@@ -154,9 +182,7 @@ def send_webhook_notification(
     timeout: int = 10,
 ) -> int:
     """Send a JSON webhook payload and return the HTTP status code."""
-    normalized_url = webhook_url.strip()
-    if not normalized_url:
-        raise ValueError("webhook_url must not be empty")
+    normalized_url = _validate_webhook_url(webhook_url)
     raw_body = json.dumps(payload.body).encode("utf-8")
     req = request.Request(
         normalized_url,
