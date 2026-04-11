@@ -33,26 +33,47 @@ class JsonFindingStore:
     """Small JSON-backed finding store used by the REST adapter and tests."""
 
     def __init__(self, path: str | Path) -> None:
-        self.path = Path(path)
+        self.path = self._validate_path(path)
         self._findings: dict[str, Finding] = {}
         self.reload()
 
+    @staticmethod
+    def _validate_path(path: str | Path) -> Path:
+        """Reject symlinked or otherwise unsafe filesystem targets."""
+        candidate = Path(path).expanduser()
+        if not candidate.is_absolute():
+            candidate = (Path.cwd() / candidate).absolute()
+
+        for parent in reversed(candidate.parents):
+            if parent.is_symlink():
+                raise ValueError("Findings store path must not traverse symlinked directories")
+            if parent.exists() and not parent.is_dir():
+                raise ValueError("Findings store parent path must be a directory")
+
+        if candidate.is_symlink():
+            raise ValueError("Findings store path must not be a symlink")
+        if candidate.exists() and not candidate.is_file():
+            raise ValueError("Findings store path must be a regular file")
+        return candidate
+
     def reload(self) -> None:
         """Reload findings from disk, treating a missing file as an empty store."""
-        if not self.path.exists():
+        path = self._validate_path(self.path)
+        if not path.exists():
             self._findings = {}
             return
 
-        raw = json.loads(self.path.read_text(encoding="utf-8"))
+        raw = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(raw, list):
             raise ValueError("Findings store must contain a JSON array")
         self._findings = {finding.id: finding for finding in (Finding(**item) for item in raw)}
 
     def save(self) -> None:
         """Persist all findings to disk in deterministic order."""
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        path = self._validate_path(self.path)
+        path.parent.mkdir(parents=True, exist_ok=True)
         payload = [finding.model_dump(mode="json") for finding in self.list()]
-        self.path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
     def list(
         self,

@@ -103,6 +103,31 @@ def test_store_rejects_non_array_json(tmp_path: Path) -> None:
         JsonFindingStore(store_path)
 
 
+def test_store_rejects_symlinked_store_file(tmp_path: Path) -> None:
+    real_store = tmp_path / "real-findings.json"
+    real_store.write_text("[]", encoding="utf-8")
+    linked_store = tmp_path / "findings.json"
+    linked_store.symlink_to(real_store)
+
+    with pytest.raises(ValueError, match="symlink"):
+        JsonFindingStore(linked_store)
+
+
+def test_store_rejects_symlinked_parent_directory(tmp_path: Path) -> None:
+    real_dir = tmp_path / "real-store"
+    real_dir.mkdir()
+    linked_dir = tmp_path / "linked-store"
+    linked_dir.symlink_to(real_dir, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="symlinked directories"):
+        JsonFindingStore(linked_dir / "findings.json")
+
+
+def test_store_rejects_non_file_target(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="regular file"):
+        JsonFindingStore(tmp_path)
+
+
 def test_verify_hs256_jwt_accepts_valid_scoped_token() -> None:
     token = _jwt(
         {
