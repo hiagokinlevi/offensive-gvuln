@@ -89,6 +89,28 @@ def test_build_jira_issue_payload_redacts_private_key_blocks() -> None:
     assert "[PRIVATE_KEY_REDACTED]" in description
 
 
+def test_build_github_issue_payload_redacts_url_credentials_and_signed_query_values() -> None:
+    payload = build_github_issue_payload(
+        _finding(
+            affected_asset="https://scanner:ultra-secret@example.test/export?sig=azure-secret&view=summary",
+            description=(
+                "Artifact download used "
+                "https://analyst:topsecret@example.test/report?"
+                "X-Amz-Signature=aws-secret&keep=1"
+            ),
+        )
+    ).to_dict()
+
+    assert "ultra-secret" not in payload["body"]
+    assert "topsecret" not in payload["body"]
+    assert "azure-secret" not in payload["body"]
+    assert "aws-secret" not in payload["body"]
+    assert "scanner:[REDACTED]@example.test" in payload["body"]
+    assert "analyst:[REDACTED]@example.test" in payload["body"]
+    assert "?sig=[REDACTED]&view=summary" in payload["body"]
+    assert "?X-Amz-Signature=[REDACTED]&keep=1" in payload["body"]
+
+
 def test_redact_sensitive_text_redacts_aws_access_keys() -> None:
     redacted = redact_sensitive_text("Leaked key AKIAIOSFODNN7EXAMPLE in request log")
 

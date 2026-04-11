@@ -26,6 +26,16 @@ _SENSITIVE_VALUE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
         r"\1=[REDACTED]",
     ),
     (
+        re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://[^/\s:@]+:)([^@/\s]+)(@)"),
+        r"\1[REDACTED]\3",
+    ),
+    (
+        re.compile(
+            r"(?i)([?&](?:sig|signature|x-amz-signature|x-goog-signature|x-ms-signature|access[_-]?token|refresh[_-]?token|api[_-]?key|apikey|client[_-]?secret)=)([^&#\s]+)"
+        ),
+        r"\1[REDACTED]",
+    ),
+    (
         re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{12,}"),
         r"\1 [REDACTED]",
     ),
