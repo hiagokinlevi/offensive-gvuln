@@ -324,6 +324,48 @@ class TestBundleIntegrity(unittest.TestCase):
         self.assertIn(missing_relative, result.missing_files)
         self.assertIn("notes.txt", result.unexpected_files)
 
+    def test_verify_bundle_rejects_manifest_path_traversal(self):
+        tracker = _tracker(_finding("Traversal Attempt"))
+        with tempfile.TemporaryDirectory() as tmpdir:
+            bundle = generate_bundle(
+                tracker=tracker,
+                output_dir=Path(tmpdir),
+                engagement_id="INTEGRITY-005",
+            )
+            outside_file = Path(tmpdir) / "outside.txt"
+            outside_file.write_text("do not read", encoding="utf-8")
+
+            manifest_path = bundle / "manifest.json"
+            manifest = json.loads(manifest_path.read_text())
+            manifest["integrity"]["files"] = [
+                {
+                    "path": "../outside.txt",
+                    "sha256": "x" * 64,
+                    "size_bytes": outside_file.stat().st_size,
+                }
+            ]
+            manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "relative bundle path"):
+                verify_bundle(bundle)
+
+    def test_verify_bundle_rejects_symlinked_expected_files(self):
+        tracker = _tracker(_finding("Symlinked Summary"))
+        with tempfile.TemporaryDirectory() as tmpdir:
+            bundle = generate_bundle(
+                tracker=tracker,
+                output_dir=Path(tmpdir),
+                engagement_id="INTEGRITY-006",
+            )
+            summary_path = bundle / "summary.md"
+            outside_file = Path(tmpdir) / "summary-copy.md"
+            outside_file.write_text(summary_path.read_text(encoding="utf-8"), encoding="utf-8")
+            summary_path.unlink()
+            summary_path.symlink_to(outside_file)
+
+            with self.assertRaisesRegex(ValueError, "must not be a symlink"):
+                verify_bundle(bundle)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

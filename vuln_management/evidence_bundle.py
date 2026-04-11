@@ -66,6 +66,42 @@ def _safe_bundle_component(value: str, *, label: str) -> str:
     return normalized
 
 
+def _safe_bundle_relative_path(value: str, *, label: str) -> Path:
+    """Restrict manifest-controlled paths to in-bundle relative file paths."""
+    normalized = value.strip()
+    candidate = Path(normalized)
+    if (
+        not normalized
+        or "\\" in normalized
+        or candidate.is_absolute()
+        or any(part in {"", ".", ".."} for part in candidate.parts)
+    ):
+        raise ValueError(f"{label} must be a relative bundle path without traversal sequences")
+    return candidate
+
+
+def _resolve_bundle_file(bundle_root: Path, relative_path: str | Path, *, label: str) -> Path:
+    """Resolve a bundle file path while rejecting symlink escapes."""
+    relative = (
+        _safe_bundle_relative_path(relative_path, label=label)
+        if isinstance(relative_path, str)
+        else _safe_bundle_relative_path(relative_path.as_posix(), label=label)
+    )
+    if bundle_root.is_symlink():
+        raise ValueError("bundle_root must not be a symlink")
+
+    current = bundle_root
+    for part in relative.parts[:-1]:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError(f"{label} must not traverse symlinked directories")
+
+    absolute = bundle_root / relative
+    if absolute.is_symlink():
+        raise ValueError(f"{label} must not be a symlink")
+    return absolute
+
+
 def _finding_to_dict(finding: Finding) -> dict:
     """Serialize a Finding to a dict suitable for JSON output."""
     return {
@@ -125,7 +161,11 @@ def _build_integrity_entries(bundle_root: Path) -> list[dict[str, int | str]]:
     for relative_path in _relative_bundle_files(bundle_root):
         if relative_path.as_posix() == "manifest.json":
             continue
-        absolute_path = bundle_root / relative_path
+        absolute_path = _resolve_bundle_file(
+            bundle_root,
+            relative_path,
+            label="bundle integrity file",
+        )
         entries.append(
             {
                 "path": relative_path.as_posix(),
@@ -379,7 +419,11 @@ def verify_bundle(bundle_root: Path) -> BundleVerificationResult:
     modified_files: list[str] = []
     verified_files = 0
     for relative_path, expected in expected_map.items():
-        absolute_path = bundle_root / relative_path
+        absolute_path = _resolve_bundle_file(
+            bundle_root,
+            relative_path,
+            label="manifest integrity path",
+        )
         if not absolute_path.exists():
             continue
         verified_files += 1
