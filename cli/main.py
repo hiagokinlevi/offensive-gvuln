@@ -122,8 +122,9 @@ def generate(findings_file: str, fmt: str, output: str) -> None:
     if output == "-":
         click.echo(report)
     else:
-        Path(output).write_text(report)
-        click.echo(f"Report written to {output}")
+        output_path = _validate_cli_output_path(output)
+        output_path.write_text(report, encoding="utf-8")
+        click.echo(f"Report written to {output_path}")
 
 
 @cli.command("notify-sla")
@@ -172,8 +173,9 @@ def notify_sla(
         if output == "-":
             click.echo(serialized)
         else:
-            Path(output).write_text(serialized, encoding="utf-8")
-            click.echo(f"SLA notification payload written to {output}")
+            output_path = _validate_cli_output_path(output)
+            output_path.write_text(serialized, encoding="utf-8")
+            click.echo(f"SLA notification payload written to {output_path}")
         return
 
     if not webhook_url.strip():
@@ -457,8 +459,9 @@ def retest_diff(baseline_file: str, candidate_file: str, fmt: str, output: str) 
         click.echo(payload)
         return
 
-    Path(output).write_text(payload, encoding="utf-8")
-    click.echo(f"Retest diff report written to {output}")
+    output_path = _validate_cli_output_path(output)
+    output_path.write_text(payload, encoding="utf-8")
+    click.echo(f"Retest diff report written to {output_path}")
 
 
 @cli.group("issue-sync")
@@ -569,8 +572,9 @@ def risk_acceptance_create(
         click.echo(payload)
         return
 
-    Path(output).write_text(payload, encoding="utf-8")
-    click.echo(f"Risk acceptance record written to {output}")
+    output_path = _validate_cli_output_path(output)
+    output_path.write_text(payload, encoding="utf-8")
+    click.echo(f"Risk acceptance record written to {output_path}")
 
 
 @risk_acceptance.command("verify")
