@@ -63,6 +63,25 @@ def _resolve_signing_key(signing_key: str | None) -> str:
     return resolved
 
 
+def _validate_cli_output_path(path: str | Path) -> Path:
+    """Reject symlinked output targets before exporting remediation artifacts."""
+    candidate = Path(path).expanduser()
+    if not candidate.is_absolute():
+        candidate = (Path.cwd() / candidate).absolute()
+
+    for parent in reversed(candidate.parents):
+        if parent.is_symlink():
+            raise click.ClickException("Output path must not traverse symlinked directories")
+        if parent.exists() and not parent.is_dir():
+            raise click.ClickException("Output parent path must be a directory")
+
+    if candidate.is_symlink():
+        raise click.ClickException("Output path must not be a symlink")
+    if candidate.exists() and not candidate.is_file():
+        raise click.ClickException("Output path must be a regular file")
+    return candidate
+
+
 @click.group()
 def cli() -> None:
     """Offensive GVuln toolkit — lifecycle and governance automation."""
@@ -493,8 +512,10 @@ def issue_sync_export(
         click.echo(rendered)
         return
 
-    Path(output).write_text(rendered, encoding="utf-8")
-    click.echo(f"Issue sync export written to {output}")
+    output_path = _validate_cli_output_path(output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(rendered, encoding="utf-8")
+    click.echo(f"Issue sync export written to {output_path}")
 
 
 @cli.group("risk-acceptance")

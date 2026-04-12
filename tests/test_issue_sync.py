@@ -244,3 +244,73 @@ def test_issue_sync_cli_can_include_closed_for_jira() -> None:
         assert rendered["generated_items"] == 2
         assert rendered["items"][0]["project_key"] == "SEC"
         assert rendered["items"][0]["payload"]["fields"]["components"] == [{"name": "appsec"}]
+
+
+def test_issue_sync_cli_rejects_symlinked_output_file() -> None:
+    from cli.main import cli as main_cli
+
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        findings_file = Path("findings.json")
+        findings_file.write_text(
+            json.dumps([_finding().model_dump(mode="json")], indent=2),
+            encoding="utf-8",
+        )
+        real_output = Path("real-export.json")
+        real_output.write_text("placeholder", encoding="utf-8")
+        linked_output = Path("jira-export.json")
+        linked_output.symlink_to(real_output)
+
+        result = runner.invoke(
+            main_cli,
+            [
+                "issue-sync",
+                "export",
+                str(findings_file),
+                "--target",
+                "jira",
+                "--project-key",
+                "SEC",
+                "--output",
+                str(linked_output),
+            ],
+        )
+
+        assert result.exit_code != 0
+        assert "must not be a symlink" in result.output
+        assert real_output.read_text(encoding="utf-8") == "placeholder"
+
+
+def test_issue_sync_cli_rejects_symlinked_output_directory() -> None:
+    from cli.main import cli as main_cli
+
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        findings_file = Path("findings.json")
+        findings_file.write_text(
+            json.dumps([_finding().model_dump(mode="json")], indent=2),
+            encoding="utf-8",
+        )
+        real_dir = Path("real-exports")
+        real_dir.mkdir()
+        linked_dir = Path("exports-link")
+        linked_dir.symlink_to(real_dir, target_is_directory=True)
+
+        result = runner.invoke(
+            main_cli,
+            [
+                "issue-sync",
+                "export",
+                str(findings_file),
+                "--target",
+                "jira",
+                "--project-key",
+                "SEC",
+                "--output",
+                str(linked_dir / "jira-export.json"),
+            ],
+        )
+
+        assert result.exit_code != 0
+        assert "symlinked directories" in result.output
+        assert not (real_dir / "jira-export.json").exists()
