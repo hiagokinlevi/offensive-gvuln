@@ -41,6 +41,8 @@ from vuln_management.sla_notifications import build_notification_payload, send_w
 from vuln_management.sla_report import build_sla_report
 from vuln_management.tracker import VulnerabilityTracker
 
+_SYSTEM_PATH_ALIASES = {Path("/tmp"), Path("/var")}
+
 
 def _parse_datetime_utc(raw_value: str) -> datetime:
     """Parseia timestamp ISO-8601 e normaliza para UTC."""
@@ -70,7 +72,7 @@ def _validate_cli_output_path(path: str | Path) -> Path:
         candidate = (Path.cwd() / candidate).absolute()
 
     for parent in reversed(candidate.parents):
-        if parent.is_symlink():
+        if parent.is_symlink() and parent not in _SYSTEM_PATH_ALIASES:
             raise click.ClickException("Output path must not traverse symlinked directories")
         if parent.exists() and not parent.is_dir():
             raise click.ClickException("Output parent path must be a directory")
@@ -367,11 +369,12 @@ def lifecycle_move(
     if save:
         # Serialize updated findings back to file
         updated = [f.model_dump(mode="json") for f in findings]
-        Path(findings_file).write_text(
+        output_path = _validate_cli_output_path(findings_file)
+        output_path.write_text(
             json.dumps(updated, indent=2, default=str),
             encoding="utf-8",
         )
-        click.echo(f"  Saved:   {findings_file}")
+        click.echo(f"  Saved:   {output_path}")
 
 
 @cli.group()
@@ -433,11 +436,12 @@ def retest_schedule(
     click.echo(f"  Scope:       {plan.scope_summary}")
 
     if save:
-        Path(findings_file).write_text(
+        output_path = _validate_cli_output_path(findings_file)
+        output_path.write_text(
             json.dumps([finding.model_dump(mode="json") for finding in findings], indent=2, default=str),
             encoding="utf-8",
         )
-        click.echo(f"Saved updated findings to {findings_file}")
+        click.echo(f"Saved updated findings to {output_path}")
 
 
 @retest.command("diff")
@@ -686,11 +690,12 @@ def risk_acceptance_apply(
 
     if save:
         updated = [f.model_dump(mode="json") for f in findings]
-        Path(findings_file).write_text(
+        output_path = _validate_cli_output_path(findings_file)
+        output_path.write_text(
             json.dumps(updated, indent=2, default=str),
             encoding="utf-8",
         )
-        click.echo(f"Saved updated findings to {findings_file}")
+        click.echo(f"Saved updated findings to {output_path}")
 
 
 if __name__ == "__main__":

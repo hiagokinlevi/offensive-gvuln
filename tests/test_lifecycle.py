@@ -358,6 +358,29 @@ class TestLifecycleCli:
             saved = json.loads(ffile.read_text())
             assert saved[0]["status"] == "triaged"
 
+    def test_lifecycle_move_save_rejects_symlinked_findings_file(self):
+        from cli.main import cli as main_cli
+
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            f = _finding()
+            real_file = _findings_file([f], ".")
+            linked_file = Path("findings-link.json")
+            linked_file.symlink_to(real_file)
+
+            result = runner.invoke(main_cli, [
+                "lifecycle", "move", str(linked_file),
+                "--id", f.id[:8],
+                "--to", "triaged",
+                "--actor", "analyst@example.com",
+                "--save",
+            ])
+            assert result.exit_code != 0
+            assert "must not be a symlink" in result.output
+
+            saved = json.loads(real_file.read_text(encoding="utf-8"))
+            assert saved[0]["status"] == "open"
+
     def test_lifecycle_move_ambiguous_id_exits_2(self):
         from cli.main import cli as main_cli
         runner = CliRunner()

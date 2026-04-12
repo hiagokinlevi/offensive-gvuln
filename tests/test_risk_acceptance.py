@@ -245,3 +245,52 @@ class TestRiskAcceptanceCli:
             assert result.exit_code == 1
             assert "invalid_signature" in result.output
 
+    def test_apply_rejects_symlinked_findings_file_when_saving(self) -> None:
+        from cli.main import cli as main_cli
+
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            finding = _make_finding()
+            real_file = Path("findings.json")
+            real_file.write_text(
+                json.dumps([finding.model_dump(mode="json")], indent=2),
+                encoding="utf-8",
+            )
+            linked_file = Path("findings-link.json")
+            linked_file.symlink_to(real_file)
+
+            record = create_risk_acceptance_record(
+                finding_id=finding.id,
+                requested_by="analyst@example.com",
+                approved_by="manager@example.com",
+                reason="Approved by governance committee.",
+                expires_at=datetime.now(timezone.utc) + timedelta(days=10),
+                signing_key="team-key",
+            )
+            record_file = Path("record.json")
+            record_file.write_text(
+                json.dumps(record.model_dump(mode="json"), indent=2),
+                encoding="utf-8",
+            )
+
+            result = runner.invoke(
+                main_cli,
+                [
+                    "risk-acceptance",
+                    "apply",
+                    str(linked_file),
+                    "--record-file",
+                    str(record_file),
+                    "--id",
+                    finding.id[:8],
+                    "--actor",
+                    "governance-bot@example.com",
+                    "--save",
+                ],
+                env={"GVULN_APPROVER_SIGNING_KEY": "team-key"},
+            )
+
+            assert result.exit_code != 0
+            assert "must not be a symlink" in result.output
+            saved = json.loads(real_file.read_text(encoding="utf-8"))
+            assert saved[0]["status"] == "triaged"

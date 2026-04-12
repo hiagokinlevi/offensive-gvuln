@@ -117,6 +117,45 @@ class TestRetestCli:
             assert saved[0]["status"] == "retest_scheduled"
             assert saved[0]["retest_plan"]["environment"] == "staging"
 
+    def test_schedule_command_rejects_symlinked_findings_file_when_saving(self) -> None:
+        from cli.main import cli as main_cli
+
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            finding = _finding(status=FindingStatus.REMEDIATED, finding_id="abc12345")
+            real_file = Path("findings.json")
+            real_file.write_text(
+                json.dumps([finding.model_dump(mode="json")], indent=2),
+                encoding="utf-8",
+            )
+            linked_file = Path("findings-link.json")
+            linked_file.symlink_to(real_file)
+
+            result = runner.invoke(
+                main_cli,
+                [
+                    "retest",
+                    "schedule",
+                    str(linked_file),
+                    "--id",
+                    "abc123",
+                    "--due-at",
+                    "2026-12-31T23:59:59Z",
+                    "--actor",
+                    "qa@example.com",
+                    "--environment",
+                    "staging",
+                    "--scope",
+                    "Verify the login workflow, exports, and API payload handling.",
+                    "--save",
+                ],
+            )
+
+            assert result.exit_code != 0
+            assert "must not be a symlink" in result.output
+            saved = json.loads(real_file.read_text(encoding="utf-8"))
+            assert saved[0]["status"] == "remediated"
+
     def test_diff_command_outputs_markdown_summary(self) -> None:
         from cli.main import cli as main_cli
 
