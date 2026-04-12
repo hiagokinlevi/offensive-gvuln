@@ -18,10 +18,23 @@ _SEVERITY_ORDER = {
     Severity.INFO: 4,
 }
 
+_SENSITIVE_FIELD_NAME = (
+    r"(?:[a-z0-9][a-z0-9._-]*?)?"
+    r"(?:password|passwd|pwd|api[_-]?key|access[_-]?token|refresh[_-]?token|"
+    r"session[_-]?token|webhook[_-]?url|secret|client[_-]?secret|private[_-]?key)"
+    r"[a-z0-9._-]*"
+)
+
 _SENSITIVE_VALUE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (
         re.compile(
-            r"(?i)\b((?:[a-z0-9][a-z0-9._-]*?)?(?:password|passwd|pwd|api[_-]?key|access[_-]?token|refresh[_-]?token|session[_-]?token|webhook[_-]?url|secret|client[_-]?secret|private[_-]?key)[a-z0-9._-]*)\s*[:=]\s*([^\s,;]+)"
+            rf"(?i)([\"']?{_SENSITIVE_FIELD_NAME}[\"']?\s*:\s*[\"'])([^\"']+)([\"'])"
+        ),
+        r"\1[REDACTED]\3",
+    ),
+    (
+        re.compile(
+            rf"(?i)\b({_SENSITIVE_FIELD_NAME})\s*[:=]\s*([^\s,;]+)"
         ),
         r"\1=[REDACTED]",
     ),
@@ -36,8 +49,16 @@ _SENSITIVE_VALUE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
         r"\1[REDACTED]",
     ),
     (
-        re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{12,}"),
+        re.compile(r"(?i)\b(bearer|basic|token)\s+[A-Za-z0-9._~+/=-]{12,}"),
         r"\1 [REDACTED]",
+    ),
+    (
+        re.compile(
+            r"(?i)\b((?:__secure-|__host-)?(?:session(?:id)?|auth(?:entication)?(?:[_-]?token)?|"
+            r"refresh[_-]?token|access[_-]?token|id[_-]?token|jwt|csrftoken|xsrf[_-]?token|"
+            r"remember[_-]?token))\s*=\s*([^;\s]+)"
+        ),
+        r"\1=[REDACTED]",
     ),
     (
         re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b"),

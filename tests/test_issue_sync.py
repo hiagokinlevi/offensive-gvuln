@@ -133,6 +133,31 @@ def test_redact_sensitive_text_redacts_prefixed_secret_field_names() -> None:
     assert "slack_webhook_url=[REDACTED]" in redacted
 
 
+def test_redact_sensitive_text_redacts_json_style_secret_values() -> None:
+    redacted = redact_sensitive_text(
+        '{"api_key": "abc-123-SECRET", "client_secret": "super-secret-value"}'
+    )
+
+    assert "abc-123-SECRET" not in redacted
+    assert "super-secret-value" not in redacted
+    assert '"api_key": "[REDACTED]"' in redacted
+    assert '"client_secret": "[REDACTED]"' in redacted
+
+
+def test_redact_sensitive_text_redacts_token_auth_and_cookie_values() -> None:
+    redacted = redact_sensitive_text(
+        "Authorization: Token sk_live_secretvalue123456 "
+        "Cookie: sessionid=abc123.supersecret.token; csrftoken=csrf-secret"
+    )
+
+    assert "sk_live_secretvalue123456" not in redacted
+    assert "abc123.supersecret.token" not in redacted
+    assert "csrf-secret" not in redacted
+    assert "Token [REDACTED]" in redacted
+    assert "sessionid=[REDACTED]" in redacted
+    assert "csrftoken=[REDACTED]" in redacted
+
+
 def test_build_jira_issue_payload_maps_priority_and_due_date() -> None:
     payload = build_jira_issue_payload(
         _finding(severity=Severity.MEDIUM),
