@@ -25,6 +25,10 @@ _SENSITIVE_FIELD_NAME = (
     r"[a-z0-9._-]*"
 )
 
+_GITHUB_TOKEN_PATTERN = re.compile(
+    r"\b(?:gh[pousr]_[A-Za-z0-9]{36,255}|github_pat_[A-Za-z0-9_]{20,255})\b"
+)
+
 _SENSITIVE_VALUE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (
         re.compile(
@@ -51,6 +55,10 @@ _SENSITIVE_VALUE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (
         re.compile(r"(?i)\b(bearer|basic|token)\s+[A-Za-z0-9._~+/=-]{12,}"),
         r"\1 [REDACTED]",
+    ),
+    (
+        _GITHUB_TOKEN_PATTERN,
+        "[GITHUB_TOKEN_REDACTED]",
     ),
     (
         re.compile(

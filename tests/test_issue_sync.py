@@ -158,6 +158,26 @@ def test_redact_sensitive_text_redacts_token_auth_and_cookie_values() -> None:
     assert "csrftoken=[REDACTED]" in redacted
 
 
+def test_build_github_issue_payload_redacts_bare_github_tokens() -> None:
+    classic_pat = "ghp_abcdefghijklmnopqrstuvwxyz0123456789ABCD"
+    fine_grained_pat = (
+        "github_pat_11ABCDEFGHijklmnop_qrstuvwxyz0123456789ABCDEFGHIJKLMN"
+    )
+    payload = build_github_issue_payload(
+        _finding(
+            affected_asset=f"https://api.example.test/tokens/{classic_pat}",
+            description=(
+                f"Temporary triage note captured {classic_pat} and "
+                f"{fine_grained_pat} in debug output."
+            ),
+        )
+    ).to_dict()
+
+    assert classic_pat not in payload["body"]
+    assert fine_grained_pat not in payload["body"]
+    assert payload["body"].count("[GITHUB_TOKEN_REDACTED]") == 3
+
+
 def test_build_jira_issue_payload_maps_priority_and_due_date() -> None:
     payload = build_jira_issue_payload(
         _finding(severity=Severity.MEDIUM),
