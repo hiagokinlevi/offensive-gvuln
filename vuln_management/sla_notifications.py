@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import ipaddress
 import json
+import socket
 from typing import Any
 from urllib import parse, request
 
@@ -26,6 +27,33 @@ class NotificationPayload:
     body: dict[str, Any]
 
 
+def _resolve_global_webhook_ips(hostname: str, *, port: int) -> None:
+    """Reject hostnames that resolve to loopback or other non-public addresses."""
+    try:
+        addrinfo = socket.getaddrinfo(
+            hostname,
+            port,
+            type=socket.SOCK_STREAM,
+            proto=socket.IPPROTO_TCP,
+        )
+    except OSError as exc:
+        raise ValueError("webhook_url hostname could not be resolved") from exc
+
+    resolved_ips: set[ipaddress.IPv4Address | ipaddress.IPv6Address] = set()
+    for family, _, _, _, sockaddr in addrinfo:
+        if family not in {socket.AF_INET, socket.AF_INET6}:
+            continue
+        try:
+            resolved_ips.add(ipaddress.ip_address(sockaddr[0]))
+        except ValueError:
+            continue
+
+    if not resolved_ips:
+        raise ValueError("webhook_url hostname could not be resolved")
+    if any(not ip_address.is_global for ip_address in resolved_ips):
+        raise ValueError("webhook_url must not resolve to loopback or non-public IP addresses")
+
+
 def _validate_webhook_url(webhook_url: str) -> str:
     normalized_url = webhook_url.strip()
     if not normalized_url:
@@ -40,12 +68,14 @@ def _validate_webhook_url(webhook_url: str) -> str:
         raise ValueError("webhook_url must not include embedded credentials")
 
     hostname = parsed.hostname.strip().rstrip(".")
-    if hostname.lower() == "localhost":
+    normalized_hostname = hostname.lower()
+    if normalized_hostname == "localhost" or normalized_hostname.endswith(".localhost"):
         raise ValueError("webhook_url must not target localhost")
 
     try:
         ip_address = ipaddress.ip_address(hostname)
     except ValueError:
+        _resolve_global_webhook_ips(hostname, port=parsed.port or 443)
         return normalized_url
 
     if not ip_address.is_global:

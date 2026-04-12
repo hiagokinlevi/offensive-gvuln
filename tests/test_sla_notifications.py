@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import socket
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -128,6 +129,17 @@ class TestSendWebhookNotification:
             captured["timeout"] = timeout
             return _Response()
 
+        def _fake_getaddrinfo(host: str, port: int, *, type: int, proto: int):
+            assert host == "hooks.slack.com"
+            assert port == 443
+            assert type == socket.SOCK_STREAM
+            assert proto == socket.IPPROTO_TCP
+            return [
+                (socket.AF_INET, type, proto, "", ("54.192.55.10", port)),
+                (socket.AF_INET6, type, proto, "", ("2600:9000:2047:3800::1", port, 0, 0)),
+            ]
+
+        monkeypatch.setattr("vuln_management.sla_notifications.socket.getaddrinfo", _fake_getaddrinfo)
         monkeypatch.setattr("vuln_management.sla_notifications.request.urlopen", _fake_urlopen)
 
         status = send_webhook_notification(
@@ -150,6 +162,7 @@ class TestSendWebhookNotification:
             ("file:///tmp/webhook.json", "must use https"),
             ("https://user:pass@hooks.slack.com/services/T000/B000/example", "embedded credentials"),
             ("https://localhost/webhook", "localhost"),
+            ("https://alerts.localhost/webhook", "localhost"),
             ("https://127.0.0.1/webhook", "non-public IP"),
             ("https://[::1]/webhook", "non-public IP"),
             ("https://10.0.0.15/webhook", "non-public IP"),
@@ -181,6 +194,39 @@ class TestSendWebhookNotification:
 
         with pytest.raises(ValueError, match=error_fragment):
             send_webhook_notification(webhook_url, payload)
+
+    def test_rejects_webhook_hostnames_that_resolve_to_non_public_ips(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        report = build_sla_report(
+            [
+                _finding(
+                    finding_id="warn-1",
+                    title="Near breach",
+                    severity=Severity.HIGH,
+                    hours_ago=100,
+                ),
+            ],
+            now=_NOW,
+        )
+        payload = build_notification_payload(report, channel="teams")
+
+        def _fake_getaddrinfo(host: str, port: int, *, type: int, proto: int):
+            assert host == "alerts.example.test"
+            return [
+                (socket.AF_INET, type, proto, "", ("127.0.0.1", port)),
+                (socket.AF_INET, type, proto, "", ("10.0.0.25", port)),
+            ]
+
+        def _unexpected_urlopen(*args, **kwargs):
+            raise AssertionError("urlopen should not be reached for rejected webhook URLs")
+
+        monkeypatch.setattr("vuln_management.sla_notifications.socket.getaddrinfo", _fake_getaddrinfo)
+        monkeypatch.setattr("vuln_management.sla_notifications.request.urlopen", _unexpected_urlopen)
+
+        with pytest.raises(ValueError, match="must not resolve to loopback or non-public IP addresses"):
+            send_webhook_notification("https://alerts.example.test/webhook", payload)
 
 
 class TestNotifySlaCli:
