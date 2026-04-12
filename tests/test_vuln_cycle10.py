@@ -23,6 +23,7 @@ from vuln_management.cve_enrichment import (
     _score_to_severity_v2,
     correlate_cvss_severity,
     enrich_findings,
+    fetch_cve,
 )
 from pentest_governance.scope_document import (
     BatchValidationReport,
@@ -227,6 +228,22 @@ class TestEnrichFindings:
         assert report.error_count == 1
         assert report.enriched_count == 0
 
+    def test_counts_fetch_error_results_as_errors(self):
+        findings = [{"cve_id": "CVE-2021-44228", "title": "Log4Shell"}]
+        fetch_error = CvssEnrichment(
+            cve_id="CVE-2021-44228",
+            description="NVD fetch error: network timeout",
+            lookup_error="network timeout",
+        )
+
+        with patch("vuln_management.cve_enrichment.fetch_cve", return_value=fetch_error):
+            report = enrich_findings(findings, request_delay=0)
+
+        assert report.error_count == 1
+        assert report.enriched_count == 0
+        assert report.results[0].enriched is False
+        assert report.results[0].error == "network timeout"
+
     def test_deduplicates_same_cve(self):
         """Two findings with the same CVE should only trigger one NVD fetch."""
         findings = [
@@ -303,6 +320,15 @@ class TestCorrelateCvssSeverity:
         result = correlate_cvss_severity(FakeFinding(), enrichment)
         assert result["internal_severity"] == "high"
         assert result["severity_mismatch"] is False
+
+
+def test_fetch_cve_returns_lookup_error_on_transport_failure():
+    with patch("urllib.request.urlopen", side_effect=TimeoutError("network timeout")):
+        enrichment = fetch_cve(" cve-2021-44228 ")
+
+    assert enrichment.cve_id == "CVE-2021-44228"
+    assert enrichment.lookup_error == "network timeout"
+    assert "NVD fetch error" in enrichment.description
 
 
 # ===========================================================================

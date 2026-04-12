@@ -69,6 +69,7 @@ class CvssEnrichment:
         cwe_ids:             List of CWE IDs associated with the CVE.
         references:          List of reference URLs (capped at 10).
         source:              Always "nvd" to identify the enrichment source.
+        lookup_error:        Transport or parsing error encountered while contacting NVD.
     """
     cve_id:           str
     description:      str = ""
@@ -82,6 +83,7 @@ class CvssEnrichment:
     cwe_ids:          list[str] = field(default_factory=list)
     references:       list[str] = field(default_factory=list)
     source:           str = "nvd"
+    lookup_error:     Optional[str] = None
 
     @property
     def effective_score(self) -> Optional[float]:
@@ -268,10 +270,9 @@ def fetch_cve(
         timeout:  HTTP request timeout in seconds (default: 10).
 
     Returns:
-        CvssEnrichment with available CVSS data.
-
-    Raises:
-        RuntimeError: If urllib is unavailable or the request fails after retries.
+        CvssEnrichment with available CVSS data. Transport failures return an
+        object with lookup_error populated so batch callers can distinguish
+        failed lookups from successful responses.
     """
     import urllib.request
     import urllib.parse
@@ -295,6 +296,7 @@ def fetch_cve(
         return CvssEnrichment(
             cve_id=cve_id,
             description=f"NVD fetch error: {exc}",
+            lookup_error=str(exc),
         )
 
 
@@ -343,20 +345,42 @@ def enrich_findings(
         # Fetch or reuse from cache
         if cve_id in seen_cves:
             enrichment = seen_cves[cve_id]
-            report.results.append(
-                EnrichmentResult(finding=finding, enriched=True, enrichment=enrichment)
-            )
-            report.enriched_count += 1
+            if enrichment.lookup_error:
+                report.results.append(
+                    EnrichmentResult(
+                        finding=finding,
+                        enriched=False,
+                        enrichment=enrichment,
+                        error=enrichment.lookup_error,
+                    )
+                )
+                report.error_count += 1
+            else:
+                report.results.append(
+                    EnrichmentResult(finding=finding, enriched=True, enrichment=enrichment)
+                )
+                report.enriched_count += 1
             continue
 
         # Fetch from NVD
         try:
             enrichment = fetch_cve(cve_id, api_key=api_key, timeout=timeout)
             seen_cves[cve_id] = enrichment
-            report.results.append(
-                EnrichmentResult(finding=finding, enriched=True, enrichment=enrichment)
-            )
-            report.enriched_count += 1
+            if enrichment.lookup_error:
+                report.results.append(
+                    EnrichmentResult(
+                        finding=finding,
+                        enriched=False,
+                        enrichment=enrichment,
+                        error=enrichment.lookup_error,
+                    )
+                )
+                report.error_count += 1
+            else:
+                report.results.append(
+                    EnrichmentResult(finding=finding, enriched=True, enrichment=enrichment)
+                )
+                report.enriched_count += 1
         except Exception as exc:
             err = str(exc)
             log.warning("Enrichment failed for %s: %s", cve_id, err)
