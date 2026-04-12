@@ -163,6 +163,12 @@ class TestSendWebhookNotification:
             ("https://user:pass@hooks.slack.com/services/T000/B000/example", "embedded credentials"),
             ("https://localhost/webhook", "localhost"),
             ("https://alerts.localhost/webhook", "localhost"),
+            ("https://hooks/webhook", "public hostname"),
+            ("https://hooks.slack.local/services/T000/B000/example", "special-use or internal hostnames"),
+            ("https://metadata.google.internal/notify", "special-use or internal hostnames"),
+            ("https://api.example/webhook", "special-use or internal hostnames"),
+            ("https://notify.test/webhook", "special-use or internal hostnames"),
+            ("https://collector.home.arpa/notify", "special-use or internal hostnames"),
             ("https://127.0.0.1/webhook", "non-public IP"),
             ("https://[::1]/webhook", "non-public IP"),
             ("https://10.0.0.15/webhook", "non-public IP"),
@@ -213,7 +219,7 @@ class TestSendWebhookNotification:
         payload = build_notification_payload(report, channel="teams")
 
         def _fake_getaddrinfo(host: str, port: int, *, type: int, proto: int):
-            assert host == "alerts.example.test"
+            assert host == "alerts.example.com"
             return [
                 (socket.AF_INET, type, proto, "", ("127.0.0.1", port)),
                 (socket.AF_INET, type, proto, "", ("10.0.0.25", port)),
@@ -226,7 +232,7 @@ class TestSendWebhookNotification:
         monkeypatch.setattr("vuln_management.sla_notifications.request.urlopen", _unexpected_urlopen)
 
         with pytest.raises(ValueError, match="must not resolve to loopback or non-public IP addresses"):
-            send_webhook_notification("https://alerts.example.test/webhook", payload)
+            send_webhook_notification("https://alerts.example.com/webhook", payload)
 
 
 class TestNotifySlaCli:

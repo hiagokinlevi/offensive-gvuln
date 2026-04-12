@@ -17,6 +17,17 @@ _TIER_ORDER = {
     "warning": 2,
 }
 
+_SPECIAL_USE_HOST_SUFFIXES = (
+    ".example",
+    ".home.arpa",
+    ".internal",
+    ".invalid",
+    ".local",
+    ".localdomain",
+    ".localhost",
+    ".test",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class NotificationPayload:
@@ -75,6 +86,10 @@ def _validate_webhook_url(webhook_url: str) -> str:
     try:
         ip_address = ipaddress.ip_address(hostname)
     except ValueError:
+        if "." not in hostname:
+            raise ValueError("webhook_url must include a public hostname")
+        if normalized_hostname.endswith(_SPECIAL_USE_HOST_SUFFIXES):
+            raise ValueError("webhook_url must not target special-use or internal hostnames")
         _resolve_global_webhook_ips(hostname, port=parsed.port or 443)
         return normalized_url
 
