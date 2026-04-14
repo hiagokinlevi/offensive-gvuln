@@ -25,3 +25,6 @@
 - [x] CVSS v3.1 base score calculator (complete formula, roundup, severity ratings, vector string parser)
 - [x] Risk acceptance workflow with approver signatures
 - [x] Retest scheduling and diff reporting
+
+## Automated Completions
+- [x] Define Vulnerability Lifecycle Specification (cycle 1)
