@@ -20,6 +20,6 @@ Examples of unacceptable behavior:
 
 ## Enforcement
 
-Community leaders are responsible for clarifying and enforcing these standards. Instances of abusive behavior may be reported to the maintainers.
+Community leaders are responsible for clarifying and enforcing these standards. Instances of abusive behavior may be reported to the maintainers at **hiagokinlevi@protonmail.com**.
 
 This Code of Conduct is adapted from the [Contributor Covenant](https://www.contributor-covenant.org), version 2.1.
