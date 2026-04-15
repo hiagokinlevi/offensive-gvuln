@@ -28,3 +28,4 @@
 
 ## Automated Completions
 - [x] Define Vulnerability Lifecycle Specification (cycle 1)
+- [x] Create Standardized Vulnerability Record Schema (cycle 2)
