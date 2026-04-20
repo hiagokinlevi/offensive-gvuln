@@ -32,3 +32,4 @@
 - [x] Create Remediation Tracking Workflow (cycle 18)
 - [x] Build Pentest Evidence Collection Guidelines (cycle 19)
 - [x] Implement Vulnerability Disclosure Policy (cycle 20)
+- [x] Create Pentest Reporting Framework (cycle 21)
