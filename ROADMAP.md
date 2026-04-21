@@ -36,3 +36,4 @@
 - [x] Add Retest and Verification Procedures (cycle 22)
 - [x] Implement Repository Directory Architecture (cycle 23)
 - [x] Generate and Publish Findings JSON Schema (cycle 24)
+- [x] Add JSONL (NDJSON) Export Format to Report Generator (cycle 25)
