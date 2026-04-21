@@ -1,71 +1,94 @@
-"""
-CLI tool: generate a vulnerability report from a findings JSON database.
-
-Usage:
-    python scripts/generate_report.py --db findings.json --format markdown --output report.md
-    python scripts/generate_report.py --db findings.json --format csv
-"""
-from __future__ import annotations
+#!/usr/bin/env python3
+import argparse
+import csv
 import json
-import sys
 from pathlib import Path
 
-import click
-
-# Allow running from repo root without installing the package
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
 from vuln_management.models import Finding
-from vuln_management.reporter import generate_report
 
 
-@click.command()
-@click.option(
-    "--db",
-    "db_path",
-    default="findings.json",
-    show_default=True,
-    type=click.Path(exists=True, readable=True),
-    help="Path to the findings JSON database.",
-)
-@click.option(
-    "--format",
-    "fmt",
-    default="markdown",
-    show_default=True,
-    type=click.Choice(["json", "csv", "markdown"], case_sensitive=False),
-    help="Output format for the report.",
-)
-@click.option(
-    "--output",
-    "output_path",
-    default=None,
-    type=click.Path(writable=True),
-    help="Write report to this file instead of stdout.",
-)
-@click.option(
-    "--open-only",
-    is_flag=True,
-    default=False,
-    help="Include only open findings in the report.",
-)
-def generate(db_path: str, fmt: str, output_path: str | None, open_only: bool) -> None:
-    """Generate a vulnerability report in the requested format."""
-    raw = json.loads(Path(db_path).read_text())
-    findings = [Finding(**f) for f in raw]
+def load_findings(path: Path) -> list[Finding]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, list):
+        raise ValueError("Findings file must contain a JSON array of findings")
+    return [Finding.model_validate(item) for item in data]
 
-    if open_only:
-        findings = [f for f in findings if f.is_open()]
-        click.echo(f"Filtered to {len(findings)} open finding(s).", err=True)
 
-    report = generate_report(findings, fmt=fmt.lower())
+def to_json(findings: list[Finding]) -> str:
+    return json.dumps([f.model_dump(mode="json") for f in findings], indent=2)
 
-    if output_path:
-        Path(output_path).write_text(report)
-        click.echo(f"Report written to {output_path}", err=True)
+
+def to_jsonl(findings: list[Finding]) -> str:
+    # Newline-delimited JSON (NDJSON): one normalized finding per line
+    return "\n".join(json.dumps(f.model_dump(mode="json")) for f in findings)
+
+
+def to_csv(findings: list[Finding]) -> str:
+    if not findings:
+        return ""
+
+    rows = [f.model_dump(mode="json") for f in findings]
+    fieldnames = sorted({k for row in rows for k in row.keys()})
+
+    from io import StringIO
+
+    output = StringIO()
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows(rows)
+    return output.getvalue()
+
+
+def to_markdown(findings: list[Finding]) -> str:
+    lines = ["# Vulnerability Report", "", f"Total Findings: **{len(findings)}**", ""]
+    for f in findings:
+        item = f.model_dump(mode="json")
+        lines.extend(
+            [
+                f"## {item.get('id', 'unknown')} — {item.get('title', 'Untitled')}",
+                f"- Severity: **{item.get('severity', 'unknown')}**",
+                f"- Status: `{item.get('status', 'unknown')}`",
+                f"- Asset: `{item.get('asset', 'unknown')}`",
+                f"- Owner: `{item.get('owner', 'unknown')}`",
+                f"- SLA Due: `{item.get('sla_due', 'n/a')}`",
+                "",
+                "### Description",
+                item.get("description", ""),
+                "",
+                "### Remediation",
+                item.get("remediation", ""),
+                "",
+            ]
+        )
+    return "\n".join(lines)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Generate vulnerability reports")
+    parser.add_argument("--findings", required=True, help="Path to findings JSON")
+    parser.add_argument(
+        "--format",
+        required=True,
+        choices=["json", "jsonl", "csv", "markdown"],
+        help="Output format",
+    )
+    parser.add_argument("--output", required=True, help="Output file path")
+    args = parser.parse_args()
+
+    findings = load_findings(Path(args.findings))
+
+    if args.format == "json":
+        rendered = to_json(findings)
+    elif args.format == "jsonl":
+        rendered = to_jsonl(findings)
+    elif args.format == "csv":
+        rendered = to_csv(findings)
     else:
-        click.echo(report)
+        rendered = to_markdown(findings)
+
+    Path(args.output).write_text(rendered, encoding="utf-8")
+    print(f"Wrote {args.format} report: {args.output}")
 
 
 if __name__ == "__main__":
-    generate()
+    main()
