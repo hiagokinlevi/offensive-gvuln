@@ -38,3 +38,4 @@
 - [x] Generate and Publish Findings JSON Schema (cycle 24)
 - [x] Add JSONL (NDJSON) Export Format to Report Generator (cycle 25)
 - [x] Add CLI command to verify finding state transition before apply (cycle 26)
+- [x] Add deterministic evidence manifest sort + timestamp normalization (cycle 27)
