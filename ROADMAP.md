@@ -39,3 +39,4 @@
 - [x] Add JSONL (NDJSON) Export Format to Report Generator (cycle 25)
 - [x] Add CLI command to verify finding state transition before apply (cycle 26)
 - [x] Add deterministic evidence manifest sort + timestamp normalization (cycle 27)
+- [x] Support --severity filter in SLA check script (cycle 28)
