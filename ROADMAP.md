@@ -40,4 +40,4 @@
 - [x] Add CLI command to verify finding state transition before apply (cycle 26)
 - [x] Add deterministic evidence manifest sort + timestamp normalization (cycle 27)
 -
-- [x] Add dry-run mode for Slack/Teams webhook notifier (cycle 30)
+- [x] Add --strict-exit-code to evidence bundle verification CLI (cycle 31)
