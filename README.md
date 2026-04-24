@@ -49,10 +49,9 @@ python scripts/check_sla.py --findings findings.json
 # Generate a vulnerability report
 python scripts/generate_report.py --findings findings.json --format markdown --output report.md
 
-# Generate NDJSON/JSONL report (one finding per line)
-python scripts/generate_report.py --findings findings.json --format jsonl --output report.jsonl
+# Validate pentest scope definition before RoE generation
+python -m cli.main scope-validate --scope-file scope.json
 
-# Create and verify a signed risk acceptance record
-python -m cli.main risk-acceptance create \
-  --finding-id <fin
+# Generate NDJSON/JSONL report (one finding per line)
+python scripts/generate_report.py --findings findings.jso
 ```
