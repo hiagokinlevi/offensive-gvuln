@@ -40,4 +40,4 @@
 - [x] Add CLI command to verify finding state transition before apply (cycle 26)
 - [x] Add deterministic evidence manifest sort + timestamp normalization (cycle 27)
 -
-- [x] Add `--output-json` mode to SLA check script (cycle 32)
+- [x] Add CLI command to validate pentest scope file before RoE generation (cycle 33)
