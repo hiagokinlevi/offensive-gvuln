@@ -1,83 +1,90 @@
 #!/usr/bin/env python3
-"""Check vulnerability findings for overdue SLA breaches."""
+"""Check vulnerability findings against severity-based SLA deadlines."""
 
 from __future__ import annotations
 
 import argparse
 import json
-import sys
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable
+from typing import Any
 
-from vuln_management.sla import check_overdue_findings
-
-_ALLOWED_SEVERITIES = {"Critical", "High", "Medium", "Low"}
-
-
-def _parse_severity_filter(raw: str | None) -> list[str] | None:
-    if raw is None:
-        return None
-
-    items = [part.strip() for part in raw.split(",") if part.strip()]
-    if not items:
-        raise ValueError("--severity must include at least one value")
-
-    invalid = [s for s in items if s not in _ALLOWED_SEVERITIES]
-    if invalid:
-        raise ValueError(
-            "Invalid severity value(s): "
-            + ", ".join(invalid)
-            + ". Allowed: Critical, High, Medium, Low"
-        )
-
-    # Preserve user order while deduplicating.
-    deduped: list[str] = []
-    for s in items:
-        if s not in deduped:
-            deduped.append(s)
-    return deduped
+from vuln_management.models import Finding
+from vuln_management.sla import is_overdue
 
 
-def _filter_findings_by_severity(findings: Iterable[dict], severities: list[str] | None) -> list[dict]:
-    if not severities:
-        return list(findings)
-    allowed = set(severities)
-    return [f for f in findings if f.get("severity") in allowed]
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Check findings against SLA windows")
-    parser.add_argument("--findings", required=True, help="Path to findings JSON file")
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Check findings for SLA breaches")
     parser.add_argument(
-        "--severity",
-        help="Optional severity filter (single or comma-separated): Critical,High,Medium,Low",
+        "--findings",
+        required=True,
+        help="Path to findings JSON file",
     )
-    return parser
+    parser.add_argument(
+        "--output-json",
+        required=False,
+        help="Optional path to write machine-readable SLA summary JSON",
+    )
+    return parser.parse_args()
+
+
+def _load_findings(path: str) -> list[Finding]:
+    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    if isinstance(raw, dict) and "findings" in raw:
+        raw = raw["findings"]
+    if not isinstance(raw, list):
+        raise ValueError("Findings input must be a list or an object containing a 'findings' list")
+    return [Finding.model_validate(item) for item in raw]
 
 
 def main() -> int:
-    parser = build_parser()
-    args = parser.parse_args()
+    args = _parse_args()
+    findings = _load_findings(args.findings)
 
-    try:
-        selected_severities = _parse_severity_filter(args.severity)
-    except ValueError as exc:
-        parser.error(str(exc))
+    now = datetime.now(timezone.utc)
+    overdue: list[dict[str, Any]] = []
 
-    findings_path = Path(args.findings)
-    data = json.loads(findings_path.read_text(encoding="utf-8"))
-    findings = data.get("findings", data)
-    findings = _filter_findings_by_severity(findings, selected_severities)
+    for finding in findings:
+        if is_overdue(finding, now=now):
+            due_date = finding.sla_due_at
+            days_overdue = max(0, (now - due_date).days)
+            overdue.append(
+                {
+                    "id": finding.id,
+                    "severity": finding.severity,
+                    "due_date": due_date.isoformat(),
+                    "days_overdue": days_overdue,
+                }
+            )
 
-    overdue = check_overdue_findings(findings)
+    # Keep existing console output behavior
+    print(f"Scanned findings: {len(findings)}")
+    print(f"Overdue findings: {len(overdue)}")
+    if overdue:
+        for item in overdue:
+            print(
+                f"- {item['id']} ({item['severity']}): due {item['due_date']} "
+                f"[{item['days_overdue']} day(s) overdue]"
+            )
 
-    if not overdue:
-        print("No overdue findings.")
-        return 0
+    if args.output_json:
+        payload = {
+            "total_findings_scanned": len(findings),
+            "overdue_count": len(overdue),
+            "overdue_findings": sorted(
+                overdue,
+                key=lambda x: (str(x["id"]), str(x["severity"]), str(x["due_date"])),
+            ),
+        }
+        out_path = Path(args.output_json)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
 
-    print(json.dumps(overdue, indent=2))
-    return 1
+    return 1 if overdue else 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())
