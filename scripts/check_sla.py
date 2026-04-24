@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Check vulnerability findings against severity-based SLA deadlines."""
-
 from __future__ import annotations
 
 import argparse
@@ -9,81 +7,67 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from vuln_management.models import Finding
-from vuln_management.sla import is_overdue
+from vuln_management.sla import evaluate_sla
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Check findings for SLA breaches")
+    parser = argparse.ArgumentParser(description="Check vulnerability SLA status")
+    parser.add_argument("--findings", required=True, help="Path to findings JSON file")
     parser.add_argument(
-        "--findings",
-        required=True,
-        help="Path to findings JSON file",
+        "--state",
+        action="append",
+        dest="states",
+        default=None,
+        help="Lifecycle state to include (repeatable, e.g. --state open --state in_progress)",
     )
     parser.add_argument(
-        "--output-json",
-        required=False,
-        help="Optional path to write machine-readable SLA summary JSON",
+        "--now",
+        default=None,
+        help="Override current time (ISO-8601, e.g. 2025-01-01T00:00:00+00:00)",
     )
     return parser.parse_args()
 
 
-def _load_findings(path: str) -> list[Finding]:
-    raw = json.loads(Path(path).read_text(encoding="utf-8"))
-    if isinstance(raw, dict) and "findings" in raw:
-        raw = raw["findings"]
-    if not isinstance(raw, list):
-        raise ValueError("Findings input must be a list or an object containing a 'findings' list")
-    return [Finding.model_validate(item) for item in raw]
+def _load_findings(path: str) -> list[dict[str, Any]]:
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    if isinstance(data, dict) and "findings" in data:
+        findings = data["findings"]
+    else:
+        findings = data
+    if not isinstance(findings, list):
+        raise ValueError("Findings payload must be a list or an object containing a 'findings' list")
+    return findings
+
+
+def _parse_now(value: str | None) -> datetime:
+    if not value:
+        return datetime.now(timezone.utc)
+    dt = datetime.fromisoformat(value)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 def main() -> int:
     args = _parse_args()
+    now = _parse_now(args.now)
     findings = _load_findings(args.findings)
 
-    now = datetime.now(timezone.utc)
-    overdue: list[dict[str, Any]] = []
+    if args.states:
+        selected = {s.strip().lower() for s in args.states if s and s.strip()}
+        findings = [f for f in findings if str(f.get("state", "")).strip().lower() in selected]
 
-    for finding in findings:
-        if is_overdue(finding, now=now):
-            due_date = finding.sla_due_at
-            days_overdue = max(0, (now - due_date).days)
-            overdue.append(
-                {
-                    "id": finding.id,
-                    "severity": finding.severity,
-                    "due_date": due_date.isoformat(),
-                    "days_overdue": days_overdue,
-                }
-            )
+    results = evaluate_sla(findings, now=now)
 
-    # Keep existing console output behavior
-    print(f"Scanned findings: {len(findings)}")
-    print(f"Overdue findings: {len(overdue)}")
-    if overdue:
-        for item in overdue:
-            print(
-                f"- {item['id']} ({item['severity']}): due {item['due_date']} "
-                f"[{item['days_overdue']} day(s) overdue]"
-            )
-
-    if args.output_json:
-        payload = {
-            "total_findings_scanned": len(findings),
-            "overdue_count": len(overdue),
-            "overdue_findings": sorted(
-                overdue,
-                key=lambda x: (str(x["id"]), str(x["severity"]), str(x["due_date"])),
-            ),
-        }
-        out_path = Path(args.output_json)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-
-    return 1 if overdue else 0
+    output = {
+        "now": now.isoformat(),
+        "total": len(results),
+        "overdue": sum(1 for r in results if r.get("overdue")),
+        "breached": sum(1 for r in results if r.get("breached")),
+        "results": results,
+    }
+    print(json.dumps(output, indent=2))
+    return 1 if output["overdue"] > 0 else 0
 
 
 if __name__ == "__main__":
