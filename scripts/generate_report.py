@@ -1,117 +1,145 @@
 #!/usr/bin/env python3
-"""Generate vulnerability reports in JSON, CSV, Markdown, or NDJSON formats."""
-
 from __future__ import annotations
 
 import argparse
 import csv
 import json
-import sys
 from pathlib import Path
-from typing import Any
+from typing import Iterable
+
+from pydantic import ValidationError
+
+from vuln_management.models import Finding, Severity
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_SCHEMA_PATH = REPO_ROOT / "vuln_management" / "schemas" / "findings.schema.json"
+def load_findings(path: Path) -> list[Finding]:
+    with path.open("r", encoding="utf-8") as f:
+        raw = json.load(f)
 
+    if not isinstance(raw, list):
+        raise ValueError("Findings file must contain a JSON array of findings")
 
-def _load_findings(findings_path: Path) -> list[dict[str, Any]]:
-    data = json.loads(findings_path.read_text(encoding="utf-8"))
-    if isinstance(data, dict) and "findings" in data:
-        findings = data["findings"]
-    else:
-        findings = data
-    if not isinstance(findings, list):
-        raise ValueError("Findings payload must be a list or an object containing a 'findings' list")
-    for idx, item in enumerate(findings):
-        if not isinstance(item, dict):
-            raise ValueError(f"Finding at index {idx} must be an object")
+    findings: list[Finding] = []
+    for item in raw:
+        findings.append(Finding.model_validate(item))
     return findings
 
 
-def _validate_schema(findings: list[dict[str, Any]], schema_path: Path) -> None:
-    try:
-        import jsonschema
-    except Exception as exc:  # pragma: no cover
-        raise RuntimeError("Schema validation requested but 'jsonschema' is not installed") from exc
+def parse_severities(severity_arg: str | None) -> set[Severity] | None:
+    if not severity_arg:
+        return None
 
-    schema = json.loads(schema_path.read_text(encoding="utf-8"))
-    validator = jsonschema.Draft202012Validator(schema)
+    parsed: set[Severity] = set()
+    invalid: list[str] = []
 
-    errors: list[str] = []
-    for idx, finding in enumerate(findings):
-        for err in validator.iter_errors(finding):
-            loc = ".".join(str(p) for p in err.path) or "<root>"
-            errors.append(f"record[{idx}] {loc}: {err.message}")
+    for token in (s.strip() for s in severity_arg.split(",")):
+        if not token:
+            continue
+        try:
+            parsed.add(Severity(token.lower()))
+        except ValueError:
+            invalid.append(token)
 
-    if errors:
-        preview = "\n".join(errors[:10])
-        if len(errors) > 10:
-            preview += f"\n... and {len(errors) - 10} more"
-        raise ValueError(f"Schema validation failed:\n{preview}")
+    if invalid:
+        valid_values = ", ".join(s.value for s in Severity)
+        raise ValueError(
+            f"Invalid --severity value(s): {', '.join(invalid)}. "
+            f"Valid values: {valid_values}"
+        )
 
+    if not parsed:
+        raise ValueError("--severity was provided but no valid severity values were found")
 
-def _render_json(findings: list[dict[str, Any]]) -> str:
-    return json.dumps(findings, indent=2)
-
-
-def _render_ndjson(findings: list[dict[str, Any]]) -> str:
-    return "\n".join(json.dumps(item, separators=(",", ":")) for item in findings) + ("\n" if findings else "")
+    return parsed
 
 
-def _render_csv(findings: list[dict[str, Any]]) -> str:
+def filter_findings_by_severity(
+    findings: Iterable[Finding],
+    severities: set[Severity] | None,
+) -> list[Finding]:
+    if not severities:
+        return list(findings)
+    return [f for f in findings if f.severity in severities]
+
+
+def render_json(findings: list[Finding]) -> str:
+    return json.dumps([f.model_dump(mode="json") for f in findings], indent=2)
+
+
+def render_csv(findings: list[Finding]) -> str:
     if not findings:
         return ""
-    headers: list[str] = sorted({k for row in findings for k in row.keys()})
+
+    fields = list(findings[0].model_dump(mode="json").keys())
+    output_lines: list[str] = []
+
     from io import StringIO
 
     buf = StringIO()
-    writer = csv.DictWriter(buf, fieldnames=headers)
+    writer = csv.DictWriter(buf, fieldnames=fields)
     writer.writeheader()
-    writer.writerows(findings)
+    for finding in findings:
+        writer.writerow(finding.model_dump(mode="json"))
+
     return buf.getvalue()
 
 
-def _render_markdown(findings: list[dict[str, Any]]) -> str:
+def render_markdown(findings: list[Finding]) -> str:
+    lines = ["# Vulnerability Report", "", f"Total Findings: **{len(findings)}**", ""]
+
     if not findings:
-        return "# Vulnerability Report\n\nNo findings.\n"
-    headers: list[str] = sorted({k for row in findings for k in row.keys()})
-    lines = ["# Vulnerability Report", "", "| " + " | ".join(headers) + " |", "| " + " | ".join(["---"] * len(headers)) + " |"]
-    for row in findings:
-        lines.append("| " + " | ".join(str(row.get(h, "")) for h in headers) + " |")
-    lines.append("")
+        lines.append("No findings to report.")
+        return "\n".join(lines)
+
+    lines.extend(
+        [
+            "| ID | Title | Severity | State |",
+            "|---|---|---|---|",
+        ]
+    )
+    for f in findings:
+        lines.append(f"| {f.id} | {f.title} | {f.severity.value} | {f.state.value} |")
     return "\n".join(lines)
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Generate vulnerability reports")
-    parser.add_argument("--findings", required=True, help="Path to findings JSON file")
-    parser.add_argument("--format", choices=["json", "csv", "markdown", "ndjson", "jsonl"], default="markdown")
-    parser.add_argument("--output", required=True, help="Output file path")
-    parser.add_argument("--validate-schema", action="store_true", help="Validate findings against repository JSON schema before rendering")
-    parser.add_argument("--schema", default=str(DEFAULT_SCHEMA_PATH), help="Optional path to findings JSON schema")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Generate vulnerability findings reports in JSON, CSV, or Markdown format. "
+            "Example severity filtering: --severity critical,high"
+        )
+    )
+    parser.add_argument("--findings", required=True, type=Path, help="Path to findings JSON file")
+    parser.add_argument(
+        "--format",
+        required=True,
+        choices=["json", "csv", "markdown"],
+        help="Output format",
+    )
+    parser.add_argument("--output", required=True, type=Path, help="Output file path")
+    parser.add_argument(
+        "--severity",
+        help="Comma-separated severity filter (e.g., critical,high)",
+    )
+
     args = parser.parse_args()
 
     try:
-        findings = _load_findings(Path(args.findings))
-        if args.validate_schema:
-            _validate_schema(findings, Path(args.schema))
+        findings = load_findings(args.findings)
+        severities = parse_severities(args.severity)
+        findings = filter_findings_by_severity(findings, severities)
+    except (ValueError, ValidationError) as exc:
+        parser.error(str(exc))
 
-        fmt = "ndjson" if args.format == "jsonl" else args.format
-        if fmt == "json":
-            rendered = _render_json(findings)
-        elif fmt == "csv":
-            rendered = _render_csv(findings)
-        elif fmt == "ndjson":
-            rendered = _render_ndjson(findings)
-        else:
-            rendered = _render_markdown(findings)
+    if args.format == "json":
+        rendered = render_json(findings)
+    elif args.format == "csv":
+        rendered = render_csv(findings)
+    else:
+        rendered = render_markdown(findings)
 
-        Path(args.output).write_text(rendered, encoding="utf-8")
-        return 0
-    except Exception as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        return 1
+    args.output.write_text(rendered, encoding="utf-8")
+    return 0
 
 
 if __name__ == "__main__":
