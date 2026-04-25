@@ -40,4 +40,4 @@
 - [x] Add CLI command to verify finding state transition before apply (cycle 26)
 - [x] Add deterministic evidence manifest sort + timestamp normalization (cycle 27)
 -
-- [x] Add `--severity` filter to report generation CLI (cycle 36)
+- [x] Add `--fail-on-overdue` gate to `scripts/check_sla.py` (cycle 37)
