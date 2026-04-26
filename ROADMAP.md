@@ -40,4 +40,4 @@
 - [x] Add CLI command to verify finding state transition before apply (cycle 26)
 - [x] Add deterministic evidence manifest sort + timestamp normalization (cycle 27)
 -
-- [x] Add `--json` machine-readable output mode to evidence bundle verification CLI (cycle 38)
+- [x] Add --updated-since filter to scripts/check_sla.py (cycle 39)
