@@ -1,131 +1,110 @@
 #!/usr/bin/env python3
-"""Check vulnerability SLA compliance from a findings JSON file.
-
-Example:
-  python scripts/check_sla.py --findings findings.json --updated-since 2026-01-01T00:00:00Z
-"""
-
 from __future__ import annotations
 
 import argparse
 import json
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
+
+SEVERITY_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1}
 
 
-SLA_BY_SEVERITY = {
-    "critical": 24 * 60 * 60,
-    "high": 7 * 24 * 60 * 60,
-    "medium": 30 * 24 * 60 * 60,
-    "low": 90 * 24 * 60 * 60,
-}
-
-
-def _parse_iso8601(value: str, *, arg_name: str) -> datetime:
-    raw = value.strip()
-    if raw.endswith("Z"):
-        raw = raw[:-1] + "+00:00"
+def _parse_dt(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
     try:
-        dt = datetime.fromisoformat(raw)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(
-            f"invalid {arg_name} datetime: '{value}'. Expected ISO-8601 format, e.g. 2026-01-01T00:00:00Z"
-        ) from exc
-
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return None
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+    return dt
 
 
-def _pick_updated_at(finding: dict[str, Any]) -> datetime | None:
-    for key in ("updated_at", "updatedAt", "last_updated", "lastUpdated", "modified_at", "modifiedAt"):
-        val = finding.get(key)
-        if isinstance(val, str) and val.strip():
-            try:
-                return _parse_iso8601(val, arg_name=key)
-            except argparse.ArgumentTypeError:
-                return None
+def _sla_due_date(finding: dict[str, Any]) -> datetime | None:
+    # Prefer explicit due_date if present; fallback to known SLA fields if available.
+    for key in ("due_date", "sla_due_date", "sla_due_at"):
+        dt = _parse_dt(finding.get(key))
+        if dt is not None:
+            return dt
     return None
 
 
-def _iter_findings(payload: Any) -> Iterable[dict[str, Any]]:
-    if isinstance(payload, list):
-        for item in payload:
-            if isinstance(item, dict):
-                yield item
+def _updated_at(finding: dict[str, Any]) -> datetime | None:
+    for key in ("updated_at", "last_updated", "modified_at"):
+        dt = _parse_dt(finding.get(key))
+        if dt is not None:
+            return dt
+    return None
+
+
+def _sort_key(sort_by: str):
+    if sort_by == "severity":
+        return lambda f: (SEVERITY_RANK.get(str(f.get("severity", "")).lower(), 0), str(f.get("id", "")))
+    if sort_by == "due_date":
+        return lambda f: ((_sla_due_date(f) or datetime.max.replace(tzinfo=timezone.utc)), str(f.get("id", "")))
+    if sort_by == "updated_at":
+        return lambda f: ((_updated_at(f) or datetime.min.replace(tzinfo=timezone.utc)), str(f.get("id", "")))
+    # id
+    return lambda f: str(f.get("id", ""))
+
+
+def _render_stdout(findings: list[dict[str, Any]]) -> None:
+    if not findings:
+        print("No overdue findings.")
         return
 
-    if isinstance(payload, dict):
-        for key in ("findings", "items", "data"):
-            val = payload.get(key)
-            if isinstance(val, list):
-                for item in val:
-                    if isinstance(item, dict):
-                        yield item
-                return
-
-
-def _is_overdue(finding: dict[str, Any], now: datetime) -> bool:
-    severity = str(finding.get("severity", "")).strip().lower()
-    if severity not in SLA_BY_SEVERITY:
-        return False
-
-    opened = finding.get("created_at") or finding.get("createdAt") or finding.get("discovered_at") or finding.get("discoveredAt")
-    if not isinstance(opened, str) or not opened.strip():
-        return False
-
-    try:
-        opened_dt = _parse_iso8601(opened, arg_name="created_at")
-    except argparse.ArgumentTypeError:
-        return False
-
-    age_seconds = (now - opened_dt).total_seconds()
-    return age_seconds > SLA_BY_SEVERITY[severity]
+    print("Overdue findings:")
+    for f in findings:
+        fid = f.get("id", "<unknown>")
+        sev = f.get("severity", "unknown")
+        due = f.get("due_date") or f.get("sla_due_date") or f.get("sla_due_at") or "n/a"
+        updated = f.get("updated_at") or f.get("last_updated") or f.get("modified_at") or "n/a"
+        print(f"- {fid} | severity={sev} | due_date={due} | updated_at={updated}")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Check overdue vulnerability findings based on severity SLA windows.",
-        epilog="Usage example: python scripts/check_sla.py --findings findings.json --updated-since 2026-01-01T00:00:00Z",
-    )
+    parser = argparse.ArgumentParser(description="Check vulnerability SLA status")
     parser.add_argument("--findings", required=True, help="Path to findings JSON file")
+    parser.add_argument("--json", action="store_true", help="Emit JSON output")
     parser.add_argument(
-        "--updated-since",
-        type=lambda s: _parse_iso8601(s, arg_name="--updated-since"),
-        default=None,
-        help="Only evaluate findings updated on/after this ISO-8601 timestamp (e.g. 2026-01-01T00:00:00Z)",
+        "--sort-by",
+        choices=["severity", "due_date", "updated_at", "id"],
+        default="id",
+        help="Sort output deterministically by selected field",
+    )
+    parser.add_argument(
+        "--descending",
+        action="store_true",
+        help="Sort in descending order",
     )
     args = parser.parse_args()
 
     findings_path = Path(args.findings)
-    if not findings_path.exists():
-        print(f"ERROR: Findings file not found: {findings_path}", file=sys.stderr)
-        return 2
+    data = json.loads(findings_path.read_text(encoding="utf-8"))
 
-    try:
-        payload = json.loads(findings_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        print(f"ERROR: Invalid JSON in findings file: {exc}", file=sys.stderr)
-        return 2
+    if isinstance(data, dict) and "findings" in data:
+        findings = data.get("findings", [])
+    elif isinstance(data, list):
+        findings = data
+    else:
+        raise SystemExit("Unsupported findings JSON structure")
 
-    findings = list(_iter_findings(payload))
+    overdue = [f for f in findings if bool(f.get("is_overdue", False))]
+    overdue = sorted(overdue, key=_sort_key(args.sort_by), reverse=args.descending)
 
-    if args.updated_since is not None:
-        filtered: list[dict[str, Any]] = []
-        for f in findings:
-            updated_at = _pick_updated_at(f)
-            if updated_at is not None and updated_at >= args.updated_since:
-                filtered.append(f)
-        findings = filtered
+    if args.json:
+        print(json.dumps({"overdue": overdue}, indent=2))
+    else:
+        _render_stdout(overdue)
 
-    now = datetime.now(timezone.utc)
-    overdue = [f for f in findings if _is_overdue(f, now)]
-
-    # Keep output format simple/unchanged: single summary line.
-    print(f"overdue={len(overdue)} total={len(findings)}")
-    return 0
+    return 1 if overdue else 0
 
 
 if __name__ == "__main__":
