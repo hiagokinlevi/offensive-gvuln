@@ -49,12 +49,8 @@ python scripts/check_sla.py --findings findings.json
 # Check overdue findings with concise aggregate output only (cron/CI friendly)
 python scripts/check_sla.py --findings findings.json --summary-only
 
-# Optional scope filter with summary-only output
-python scripts/check_sla.py --findings findings.json --scope prod --summary-only
+# Export filtered SLA results to CSV for SOC/SIEM ingestion
+python scripts/check_sla.py --findings findings.json --csv sla_results.csv
 
-# Generate a vulnerability report
-python scripts/generate_report.py --findings findings.json --format markdown --output report.md
-
-# Validate pentest scope definition before RoE generation
-python -m cli.main scope-validate --scope-file scope.
+# Optional scope filter with summary-only out
 ```
