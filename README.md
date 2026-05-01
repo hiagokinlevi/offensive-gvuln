@@ -43,15 +43,18 @@ offensive-gvuln/
 ```bash
 pip install -e ".[dev]"
 
-# Check overdue findings
+# Check overdue findings (default: detailed per-finding output + summary)
 python scripts/check_sla.py --findings findings.json
+
+# Check overdue findings with concise aggregate output only (cron/CI friendly)
+python scripts/check_sla.py --findings findings.json --summary-only
+
+# Optional scope filter with summary-only output
+python scripts/check_sla.py --findings findings.json --scope prod --summary-only
 
 # Generate a vulnerability report
 python scripts/generate_report.py --findings findings.json --format markdown --output report.md
 
 # Validate pentest scope definition before RoE generation
-python -m cli.main scope-validate --scope-file scope.json
-
-# Generate NDJSON/JSONL report (one finding per line)
-python scripts/generate_report.py --findings findings.jso
+python -m cli.main scope-validate --scope-file scope.
 ```
