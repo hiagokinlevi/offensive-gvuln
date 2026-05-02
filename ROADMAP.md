@@ -40,4 +40,4 @@
 - [x] Add CLI command to verify finding state transition before apply (cycle 26)
 - [x] Add deterministic evidence manifest sort + timestamp normalization (cycle 27)
 -
-- [x] Add `--strict` mode to scope validator CLI to return non-zero on wildcard scope entries (cycle 44)
+- [x] Add `--max-findings` limit to report generation CLI (cycle 45)
