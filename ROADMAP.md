@@ -40,4 +40,4 @@
 - [x] Add CLI command to verify finding state transition before apply (cycle 26)
 - [x] Add deterministic evidence manifest sort + timestamp normalization (cycle 27)
 -
-- [x] Add `--max-findings` limit to report generation CLI (cycle 45)
+- [x] Add `--exit-code-only` quiet mode to `scripts/check_sla.py` (cycle 46)
