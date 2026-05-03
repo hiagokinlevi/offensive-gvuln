@@ -1,160 +1,149 @@
 #!/usr/bin/env python3
-"""Check vulnerability findings for SLA overdue status.
-
-Usage examples:
-  python scripts/check_sla.py --findings findings.json
-  python scripts/check_sla.py --findings findings.json --format json --summary-only
-  python scripts/check_sla.py --findings findings.json --sla-tier high
-"""
+"""Check vulnerability findings against severity-based SLA windows."""
 
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import sys
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
-
+from typing import Iterable
 
 SLA_HOURS = {
-    "critical": 24,
-    "high": 7 * 24,
-    "medium": 30 * 24,
-    "low": 90 * 24,
+    "Critical": 24,
+    "High": 24 * 7,
+    "Medium": 24 * 30,
+    "Low": 24 * 90,
 }
+VALID_SEVERITIES = tuple(SLA_HOURS.keys())
 
 
-def _parse_dt(value: str) -> datetime:
-    v = value.strip()
-    if v.endswith("Z"):
-        v = v[:-1] + "+00:00"
-    dt = datetime.fromisoformat(v)
+def _parse_datetime(value: str) -> datetime:
+    value = value.strip()
+    if value.endswith("Z"):
+        value = value[:-1] + "+00:00"
+    dt = datetime.fromisoformat(value)
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
-    return dt
+    return dt.astimezone(timezone.utc)
 
 
-def _load_findings(path: Path) -> List[Dict[str, Any]]:
-    with path.open("r", encoding="utf-8") as fh:
-        data = json.load(fh)
-    if isinstance(data, dict) and "findings" in data and isinstance(data["findings"], list):
-        return data["findings"]
-    if isinstance(data, list):
-        return data
-    raise ValueError("Unsupported findings JSON format; expected list or {'findings': [...]}.")
+def _normalize_severities(raw_values: list[str] | None) -> set[str] | None:
+    if not raw_values:
+        return None
 
+    tokens: list[str] = []
+    for entry in raw_values:
+        tokens.extend(part.strip() for part in entry.split(","))
 
-def _evaluate(findings: List[Dict[str, Any]], now: datetime) -> List[Dict[str, Any]]:
-    results: List[Dict[str, Any]] = []
-    for f in findings:
-        sev = str(f.get("severity", "")).strip().lower()
-        if sev not in SLA_HOURS:
+    selected: set[str] = set()
+    invalid: list[str] = []
+
+    canonical = {s.lower(): s for s in VALID_SEVERITIES}
+    for token in tokens:
+        if not token:
             continue
-        created_raw = f.get("created_at") or f.get("created") or f.get("discovered_at")
-        if not created_raw:
+        mapped = canonical.get(token.lower())
+        if mapped is None:
+            invalid.append(token)
+        else:
+            selected.add(mapped)
+
+    if invalid:
+        allowed = ", ".join(VALID_SEVERITIES)
+        raise ValueError(
+            f"Invalid severity value(s): {', '.join(invalid)}. Allowed values: {allowed}."
+        )
+
+    return selected if selected else None
+
+
+def _iter_open_findings(findings: Iterable[dict]) -> Iterable[dict]:
+    for finding in findings:
+        status = str(finding.get("status", "")).lower()
+        if status in {"closed", "resolved", "remediated", "accepted"}:
             continue
+        yield finding
+
+
+def _load_findings(path: Path) -> list[dict]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(data, dict) and "findings" in data:
+        data = data["findings"]
+    if not isinstance(data, list):
+        raise ValueError("Findings input must be a JSON array or an object with a 'findings' array.")
+    return data
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Evaluate finding SLA breaches by severity.")
+    parser.add_argument("--findings", required=True, help="Path to findings JSON")
+    parser.add_argument(
+        "--summary-only",
+        action="store_true",
+        help="Print only aggregate breach counts",
+    )
+    parser.add_argument(
+        "--severity",
+        action="append",
+        help="Limit evaluation to severities (repeatable or comma-separated): Critical,High,Medium,Low",
+    )
+    args = parser.parse_args()
+
+    try:
+        findings = _load_findings(Path(args.findings))
+        selected_severities = _normalize_severities(args.severity)
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    now = datetime.now(timezone.utc)
+
+    open_findings = list(_iter_open_findings(findings))
+    if selected_severities is not None:
+        open_findings = [
+            f for f in open_findings if str(f.get("severity", "")).strip() in selected_severities
+        ]
+
+    overdue: list[tuple[dict, float]] = []
+    counts = Counter()
+
+    for finding in open_findings:
+        severity = str(finding.get("severity", "")).strip()
+        sla_hours = SLA_HOURS.get(severity)
+        if sla_hours is None:
+            continue
+
+        discovered_at = finding.get("discovered_at") or finding.get("created_at")
+        if not discovered_at:
+            continue
+
         try:
-            created = _parse_dt(str(created_raw))
+            discovered_dt = _parse_datetime(str(discovered_at))
         except Exception:
             continue
 
-        due = created.timestamp() + SLA_HOURS[sev] * 3600
-        overdue = now.timestamp() > due
+        age_hours = (now - discovered_dt).total_seconds() / 3600
+        if age_hours > sla_hours:
+            overdue.append((finding, age_hours - sla_hours))
+            counts[severity] += 1
 
-        results.append(
-            {
-                "id": f.get("id") or f.get("finding_id") or "",
-                "title": f.get("title") or "",
-                "severity": sev,
-                "created_at": created.isoformat(),
-                "due_at": datetime.fromtimestamp(due, tz=timezone.utc).isoformat(),
-                "overdue": overdue,
-            }
-        )
-    return results
+    if not args.summary_only:
+        for finding, overdue_hours in overdue:
+            fid = finding.get("id", "<no-id>")
+            severity = finding.get("severity", "Unknown")
+            title = finding.get("title", "")
+            print(f"{fid} | {severity} | overdue {overdue_hours:.1f}h | {title}")
 
+    total_overdue = sum(counts.values())
+    print("SLA Summary")
+    for sev in VALID_SEVERITIES:
+        print(f"- {sev}: {counts.get(sev, 0)} overdue")
+    print(f"- Total: {total_overdue} overdue")
 
-def _print_table(rows: List[Dict[str, Any]]) -> None:
-    if not rows:
-        print("No findings matched.")
-        return
-    print("id\tseverity\toverdue\tdue_at\ttitle")
-    for r in rows:
-        print(f"{r['id']}\t{r['severity']}\t{str(r['overdue']).lower()}\t{r['due_at']}\t{r['title']}")
-
-
-def _print_summary(rows: List[Dict[str, Any]]) -> None:
-    total = len(rows)
-    overdue = sum(1 for r in rows if r["overdue"])
-    by_sev: Dict[str, int] = {k: 0 for k in SLA_HOURS}
-    for r in rows:
-        by_sev[r["severity"]] += 1
-    print(f"total={total} overdue={overdue} critical={by_sev['critical']} high={by_sev['high']} medium={by_sev['medium']} low={by_sev['low']}")
-
-
-def _emit_json(rows: List[Dict[str, Any]], summary_only: bool) -> None:
-    if summary_only:
-        out = {
-            "total": len(rows),
-            "overdue": sum(1 for r in rows if r["overdue"]),
-            "by_severity": {
-                "critical": sum(1 for r in rows if r["severity"] == "critical"),
-                "high": sum(1 for r in rows if r["severity"] == "high"),
-                "medium": sum(1 for r in rows if r["severity"] == "medium"),
-                "low": sum(1 for r in rows if r["severity"] == "low"),
-            },
-        }
-    else:
-        out = rows
-    print(json.dumps(out, indent=2))
-
-
-def _emit_csv(rows: List[Dict[str, Any]]) -> None:
-    w = csv.DictWriter(sys.stdout, fieldnames=["id", "title", "severity", "created_at", "due_at", "overdue"])
-    w.writeheader()
-    for r in rows:
-        w.writerow(r)
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Check findings against severity SLA windows")
-    parser.add_argument("--findings", required=True, help="Path to findings JSON")
-    parser.add_argument("--format", choices=["table", "json", "csv"], default="table")
-    parser.add_argument("--summary-only", action="store_true", help="Emit aggregate summary only")
-    parser.add_argument(
-        "--sla-tier",
-        choices=["critical", "high", "medium", "low"],
-        help="Restrict evaluation to a single SLA/severity tier",
-    )
-    return parser
-
-
-def main(argv: List[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
-
-    findings = _load_findings(Path(args.findings))
-    if args.sla_tier:
-        findings = [f for f in findings if str(f.get("severity", "")).strip().lower() == args.sla_tier]
-
-    rows = _evaluate(findings, now=datetime.now(timezone.utc))
-
-    if args.format == "json":
-        _emit_json(rows, summary_only=args.summary_only)
-        return 0
-
-    if args.format == "csv":
-        _emit_csv(rows)
-        return 0
-
-    if args.summary_only:
-        _print_summary(rows)
-    else:
-        _print_table(rows)
-        _print_summary(rows)
-    return 0
+    return 1 if total_overdue > 0 else 0
 
 
 if __name__ == "__main__":
