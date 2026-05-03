@@ -49,11 +49,8 @@ python scripts/check_sla.py --findings findings.json
 # Check overdue findings with concise aggregate output only (cron/CI friendly)
 python scripts/check_sla.py --findings findings.json --summary-only
 
-# Emit machine-readable JSON for automation/CI parsers
-python scripts/check_sla.py --findings findings.json --format json
+# Limit SLA evaluation to selected severity tiers
+python scripts/check_sla.py --findings findings.json --severity Critical,High
 
-# Emit aggregate-only JSON (no finding rows)
-python scripts/check_sla.py --findings findings.json --format json --summary-only
-
-# Export filtered SLA results to CSV for SOC/
+# Emit machine-readable JSON for automation/C
 ```
