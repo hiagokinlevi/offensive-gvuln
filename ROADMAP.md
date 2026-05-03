@@ -40,4 +40,4 @@
 - [x] Add CLI command to verify finding state transition before apply (cycle 26)
 - [x] Add deterministic evidence manifest sort + timestamp normalization (cycle 27)
 -
-- [x] Add `--sla-tier` filter to `scripts/check_sla.py` (cycle 48)
+- [x] Add `--severity` filter to `scripts/check_sla.py` (cycle 49)
