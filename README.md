@@ -49,8 +49,11 @@ python scripts/check_sla.py --findings findings.json
 # Check overdue findings with concise aggregate output only (cron/CI friendly)
 python scripts/check_sla.py --findings findings.json --summary-only
 
-# Export filtered SLA results to CSV for SOC/SIEM ingestion
-python scripts/check_sla.py --findings findings.json --csv sla_results.csv
+# Emit machine-readable JSON for automation/CI parsers
+python scripts/check_sla.py --findings findings.json --format json
 
-# Optional scope filter with summary-only out
+# Emit aggregate-only JSON (no finding rows)
+python scripts/check_sla.py --findings findings.json --format json --summary-only
+
+# Export filtered SLA results to CSV for SOC/
 ```
