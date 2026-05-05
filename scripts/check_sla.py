@@ -1,99 +1,89 @@
 #!/usr/bin/env python3
-"""Check vulnerability SLA status and print overdue findings."""
-
 from __future__ import annotations
 
 import argparse
 import json
-import sys
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Iterable
+from typing import Any
 
-SLA_DAYS = {
-    "critical": 1,
-    "high": 7,
-    "medium": 30,
-    "low": 90,
-}
+from vuln_management.models import Finding, Severity
+from vuln_management.sla import get_overdue_findings
 
 
-@dataclass
-class Finding:
-    finding_id: str
-    title: str
-    severity: str
-    discovered_at: datetime
-    state: str
-
-
-def _parse_dt(value: str) -> datetime:
-    # Supports both Z and explicit offsets
-    if value.endswith("Z"):
-        value = value[:-1] + "+00:00"
-    return datetime.fromisoformat(value).astimezone(timezone.utc)
+def _parse_iso_date(value: str) -> date:
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"invalid --created-before date '{value}'; expected YYYY-MM-DD"
+        ) from exc
+    # Enforce strict YYYY-MM-DD (date.fromisoformat accepts this format; this guard ensures no surprises)
+    if parsed.isoformat() != value:
+        raise argparse.ArgumentTypeError(
+            f"invalid --created-before date '{value}'; expected YYYY-MM-DD"
+        )
+    return parsed
 
 
 def _load_findings(path: Path) -> list[Finding]:
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    findings = raw.get("findings", raw if isinstance(raw, list) else [])
-    out: list[Finding] = []
-    for item in findings:
-        out.append(
-            Finding(
-                finding_id=item.get("id", item.get("finding_id", "unknown")),
-                title=item.get("title", ""),
-                severity=str(item.get("severity", "")).lower(),
-                discovered_at=_parse_dt(item["discovered_at"]),
-                state=str(item.get("state", "open")).lower(),
-            )
-        )
-    return out
+    data: Any = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, list):
+        raise ValueError("Findings file must be a JSON array")
+    return [Finding.model_validate(item) for item in data]
 
 
-def _iter_overdue(findings: Iterable[Finding], now: datetime) -> Iterable[tuple[Finding, int]]:
-    for f in findings:
-        if f.state in {"resolved", "closed", "accepted_risk", "risk_accepted", "false_positive"}:
-            continue
-        if f.severity not in SLA_DAYS:
-            continue
-        age_days = (now - f.discovered_at).total_seconds() / 86400
-        overdue_days = int(age_days - SLA_DAYS[f.severity])
-        if overdue_days >= 0:
-            yield f, overdue_days
+def _created_on_or_before(finding: Finding, cutoff: date) -> bool:
+    created = finding.created_at
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    created_date = created.astimezone(timezone.utc).date()
+    return created_date <= cutoff
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Check findings against SLA deadlines")
-    parser.add_argument("--findings", required=True, help="Path to findings JSON")
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Check overdue vulnerability findings by SLA")
+    parser.add_argument("--findings", required=True, help="Path to findings JSON file")
+    parser.add_argument(
+        "--severity",
+        choices=[s.value for s in Severity],
+        help="Only evaluate findings of this severity",
+    )
+    parser.add_argument("--tier", help="Only evaluate findings for this ownership tier")
+    parser.add_argument(
+        "--created-before",
+        type=_parse_iso_date,
+        help="Only include findings created on or before YYYY-MM-DD before SLA evaluation",
+    )
     parser.add_argument(
         "--summary-only",
         action="store_true",
-        help="Only print aggregate overdue count",
+        help="Only output aggregate counts (suitable for cron/CI)",
     )
-    parser.add_argument(
-        "--fail-on-overdue",
-        type=int,
-        default=1,
-        help=(
-            "Exit non-zero when overdue findings count is greater than or equal to this threshold "
-            "(default: 1). Use 0 to always fail, or a higher value for tolerance windows."
-        ),
-    )
-    args = parser.parse_args(argv)
+
+    args = parser.parse_args()
 
     findings = _load_findings(Path(args.findings))
-    now = datetime.now(timezone.utc)
-    overdue = list(_iter_overdue(findings, now))
+
+    if args.created_before is not None:
+        findings = [f for f in findings if _created_on_or_before(f, args.created_before)]
+
+    if args.severity:
+        findings = [f for f in findings if f.severity.value == args.severity]
+    if args.tier:
+        findings = [f for f in findings if f.owner_tier == args.tier]
+
+    overdue = get_overdue_findings(findings)
 
     if not args.summary_only:
-        for f, days in overdue:
-            print(f"[OVERDUE] {f.finding_id} ({f.severity}) - {f.title} :: overdue_by_days={days}")
+        for finding in overdue:
+            print(
+                f"{finding.id}\t{finding.severity.value}\t{finding.owner_tier}\t"
+                f"created={finding.created_at.isoformat()}"
+            )
 
-    print(f"overdue_count={len(overdue)}")
-
-    return 1 if len(overdue) >= args.fail_on_overdue else 0
+    print(f"total_findings={len(findings)} overdue={len(overdue)}")
+    return 1 if overdue else 0
 
 
 if __name__ == "__main__":
