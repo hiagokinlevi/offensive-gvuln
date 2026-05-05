@@ -40,4 +40,4 @@
 - [x] Add CLI command to verify finding state transition before apply (cycle 26)
 - [x] Add deterministic evidence manifest sort + timestamp normalization (cycle 27)
 -
-- [x] Add `--fail-on-overdue` threshold mode to `scripts/check_sla.py` (cycle 52)
+- [x] Add `--created-before` date filter to `scripts/check_sla.py` (cycle 53)
