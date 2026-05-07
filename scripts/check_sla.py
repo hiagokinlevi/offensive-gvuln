@@ -1,148 +1,160 @@
 #!/usr/bin/env python3
+"""Check vulnerability findings against severity-based SLA windows.
+
+By default the checker is tolerant: malformed finding records are skipped.
+Use --strict to fail fast (non-zero exit) when any record is malformed.
+"""
+
 from __future__ import annotations
 
 import argparse
 import json
+import sys
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
-SEVERITY_SLA = {
+SLA_WINDOWS = {
     "critical": timedelta(hours=24),
     "high": timedelta(days=7),
     "medium": timedelta(days=30),
     "low": timedelta(days=90),
 }
 
-SEVERITY_ORDER = {
-    "critical": 0,
-    "high": 1,
-    "medium": 2,
-    "low": 3,
-}
+OPEN_STATES = {"open", "in_progress", "reopened"}
+VALID_SEVERITIES = set(SLA_WINDOWS.keys())
 
 
-def _parse_dt(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    v = value.strip()
-    if not v:
-        return None
-    if v.endswith("Z"):
-        v = v[:-1] + "+00:00"
+@dataclass
+class ParseResult:
+    finding_id: str
+    severity: str
+    state: str
+    discovered_at: datetime
+    raw: dict[str, Any]
+
+
+def _parse_datetime(value: Any) -> datetime:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("discovered_at must be a non-empty ISO-8601 string")
+
+    normalized = value.strip().replace("Z", "+00:00")
     try:
-        dt = datetime.fromisoformat(v)
-    except ValueError:
-        return None
+        dt = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise ValueError(f"invalid discovered_at: {value!r}") from exc
+
     if dt.tzinfo is None:
+        # Treat naive timestamps as UTC for stable behavior.
         dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+    return dt
 
 
-def _iso(dt: datetime | None) -> str | None:
-    if dt is None:
-        return None
-    return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+def _parse_finding(record: Any, index: int) -> ParseResult:
+    if not isinstance(record, dict):
+        raise ValueError(f"record at index {index} must be an object")
+
+    missing = [k for k in ("id", "severity", "state", "discovered_at") if k not in record]
+    if missing:
+        raise ValueError(f"record at index {index} missing required fields: {', '.join(missing)}")
+
+    finding_id = str(record["id"]).strip()
+    if not finding_id:
+        raise ValueError(f"record at index {index} has empty id")
+
+    severity = str(record["severity"]).strip().lower()
+    if severity not in VALID_SEVERITIES:
+        raise ValueError(
+            f"record {finding_id!r} has invalid severity {record['severity']!r}; "
+            f"expected one of {sorted(VALID_SEVERITIES)}"
+        )
+
+    state = str(record["state"]).strip().lower()
+    # "bad severity/state/date" requirement: validate state against known open/closed states.
+    valid_states = OPEN_STATES | {"resolved", "closed", "accepted_risk", "false_positive"}
+    if state not in valid_states:
+        raise ValueError(f"record {finding_id!r} has invalid state {record['state']!r}")
+
+    discovered_at = _parse_datetime(record["discovered_at"])
+
+    return ParseResult(
+        finding_id=finding_id,
+        severity=severity,
+        state=state,
+        discovered_at=discovered_at,
+        raw=record,
+    )
 
 
-def _due_at(finding: dict[str, Any]) -> datetime | None:
-    sev = str(finding.get("severity", "")).lower()
-    created = _parse_dt(finding.get("created_at"))
-    if created is None or sev not in SEVERITY_SLA:
-        return None
-    return created + SEVERITY_SLA[sev]
-
-
-def _sort_key(sort_by: str, finding: dict[str, Any]):
-    fid = str(finding.get("id", ""))
-    if sort_by == "severity":
-        sev_rank = SEVERITY_ORDER.get(str(finding.get("severity", "")).lower(), 99)
-        due = _due_at(finding) or datetime.max.replace(tzinfo=timezone.utc)
-        created = _parse_dt(finding.get("created_at")) or datetime.max.replace(tzinfo=timezone.utc)
-        return (sev_rank, due, created, fid)
-    if sort_by == "created_at":
-        created = _parse_dt(finding.get("created_at")) or datetime.max.replace(tzinfo=timezone.utc)
-        due = _due_at(finding) or datetime.max.replace(tzinfo=timezone.utc)
-        sev_rank = SEVERITY_ORDER.get(str(finding.get("severity", "")).lower(), 99)
-        return (created, due, sev_rank, fid)
-    # default due_at
-    due = _due_at(finding) or datetime.max.replace(tzinfo=timezone.utc)
-    sev_rank = SEVERITY_ORDER.get(str(finding.get("severity", "")).lower(), 99)
-    created = _parse_dt(finding.get("created_at")) or datetime.max.replace(tzinfo=timezone.utc)
-    return (due, sev_rank, created, fid)
-
-
-def _load_findings(path: str) -> list[dict[str, Any]]:
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+def _load_findings(path: Path) -> list[Any]:
+    data = json.loads(path.read_text(encoding="utf-8"))
     if isinstance(data, list):
-        return [x for x in data if isinstance(x, dict)]
+        return data
     if isinstance(data, dict) and isinstance(data.get("findings"), list):
-        return [x for x in data["findings"] if isinstance(x, dict)]
-    return []
+        return data["findings"]
+    raise ValueError("input must be a JSON array or object with a 'findings' array")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Check vulnerability remediation SLA status")
-    parser.add_argument("--findings", required=True, help="Path to findings JSON file")
-    parser.add_argument("--json", action="store_true", help="Emit JSON output")
-    parser.add_argument("--summary-only", action="store_true", help="Only print summary counts")
+    parser = argparse.ArgumentParser(description="Check finding SLA compliance")
+    parser.add_argument("--findings", required=True, help="Path to findings JSON")
+    parser.add_argument("--summary-only", action="store_true", help="Print only summary output")
     parser.add_argument(
-        "--sort-by",
-        choices=["due_at", "severity", "created_at"],
-        default="due_at",
-        help="Deterministic ordering for filtered findings output (default: due_at)",
+        "--strict",
+        action="store_true",
+        help="Fail (non-zero) if any finding record is malformed",
     )
     args = parser.parse_args()
 
     now = datetime.now(timezone.utc)
-    findings = _load_findings(args.findings)
 
-    enriched: list[dict[str, Any]] = []
-    for f in findings:
-        status = str(f.get("status", "")).lower()
-        if status in {"closed", "resolved", "accepted", "mitigated"}:
+    try:
+        records = _load_findings(Path(args.findings))
+    except Exception as exc:
+        print(f"ERROR: failed to read findings: {exc}", file=sys.stderr)
+        return 2
+
+    overdue = 0
+    evaluated = 0
+    skipped_invalid = 0
+
+    for idx, record in enumerate(records):
+        try:
+            finding = _parse_finding(record, idx)
+        except Exception as exc:
+            skipped_invalid += 1
+            print(f"WARN: skipped invalid finding at index {idx}: {exc}", file=sys.stderr)
             continue
-        due = _due_at(f)
-        is_overdue = bool(due and due < now)
-        row = dict(f)
-        row["due_at"] = _iso(due)
-        row["overdue"] = is_overdue
-        enriched.append(row)
 
-    summary = {
-        "total_open": len(enriched),
-        "overdue": sum(1 for x in enriched if x.get("overdue")),
-        "by_severity": {"critical": 0, "high": 0, "medium": 0, "low": 0},
-    }
-    for x in enriched:
-        sev = str(x.get("severity", "")).lower()
-        if sev in summary["by_severity"]:
-            summary["by_severity"][sev] += 1
+        if finding.state not in OPEN_STATES:
+            continue
 
-    ordered = sorted(enriched, key=lambda f: _sort_key(args.sort_by, f))
+        evaluated += 1
+        deadline = finding.discovered_at + SLA_WINDOWS[finding.severity]
+        is_overdue = now > deadline
+        if is_overdue:
+            overdue += 1
 
-    if args.json:
-        payload = {"summary": summary, "findings": ordered}
-        print(json.dumps(payload, indent=2))
-        return 0
-
-    if not args.summary_only:
-        for x in ordered:
+        if not args.summary_only:
+            status = "OVERDUE" if is_overdue else "OK"
             print(
-                f"[{str(x.get('severity', 'unknown')).upper()}] "
-                f"{x.get('id', '<no-id>')} "
-                f"status={x.get('status', 'unknown')} "
-                f"created_at={x.get('created_at')} due_at={x.get('due_at')} "
-                f"overdue={x.get('overdue')}"
+                f"{status}\t{finding.finding_id}\tseverity={finding.severity}\t"
+                f"state={finding.state}\tdeadline={deadline.isoformat()}"
             )
 
-    print("\nSummary:")
-    print(f"  total_open: {summary['total_open']}")
-    print(f"  overdue: {summary['overdue']}")
-    print("  by_severity:")
-    for sev in ("critical", "high", "medium", "low"):
-        print(f"    {sev}: {summary['by_severity'][sev]}")
-    return 0
+    print(
+        f"summary: total={len(records)} evaluated_open={evaluated} overdue={overdue} skipped_invalid={skipped_invalid}"
+    )
+
+    if args.strict and skipped_invalid > 0:
+        print(
+            f"ERROR: strict mode enabled and {skipped_invalid} malformed finding record(s) were encountered",
+            file=sys.stderr,
+        )
+        return 3
+
+    return 1 if overdue > 0 else 0
 
 
 if __name__ == "__main__":
