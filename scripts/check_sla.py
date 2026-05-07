@@ -3,114 +3,146 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import date, datetime, timezone
-from pathlib import Path
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from vuln_management.models import Finding
-from vuln_management.sla import is_overdue
+SEVERITY_SLA = {
+    "critical": timedelta(hours=24),
+    "high": timedelta(days=7),
+    "medium": timedelta(days=30),
+    "low": timedelta(days=90),
+}
+
+SEVERITY_ORDER = {
+    "critical": 0,
+    "high": 1,
+    "medium": 2,
+    "low": 3,
+}
 
 
-def _parse_iso_date(value: str) -> date:
-    try:
-        return date.fromisoformat(value)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(
-            f"Invalid value for --updated-after: '{value}'. Expected format YYYY-MM-DD."
-        ) from exc
-
-
-def _parse_datetime(value: str) -> datetime | None:
+def _parse_dt(value: str | None) -> datetime | None:
     if not value:
         return None
+    v = value.strip()
+    if not v:
+        return None
+    if v.endswith("Z"):
+        v = v[:-1] + "+00:00"
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(v)
     except ValueError:
         return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
-def _load_findings(path: Path) -> list[Finding]:
-    data: Any = json.loads(path.read_text(encoding="utf-8"))
-    if isinstance(data, dict):
-        items = data.get("findings", [])
-    else:
-        items = data
-    return [Finding.model_validate(item) for item in items]
+def _iso(dt: datetime | None) -> str | None:
+    if dt is None:
+        return None
+    return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Check remediation SLA status for findings")
-    parser.add_argument("--findings", required=True, help="Path to findings JSON")
-    parser.add_argument(
-        "--severity",
-        action="append",
-        default=[],
-        help="Filter by severity (repeatable)",
-    )
-    parser.add_argument(
-        "--state",
-        action="append",
-        default=[],
-        help="Filter by state (repeatable)",
-    )
-    parser.add_argument(
-        "--summary-only",
-        action="store_true",
-        help="Print aggregate summary only",
-    )
-    parser.add_argument(
-        "--updated-after",
-        type=_parse_iso_date,
-        help="Include only findings updated on or after YYYY-MM-DD before SLA evaluation",
-    )
-    return parser
+def _due_at(finding: dict[str, Any]) -> datetime | None:
+    sev = str(finding.get("severity", "")).lower()
+    created = _parse_dt(finding.get("created_at"))
+    if created is None or sev not in SEVERITY_SLA:
+        return None
+    return created + SEVERITY_SLA[sev]
 
 
-def _matches_filters(finding: Finding, severities: set[str], states: set[str], updated_after: date | None) -> bool:
-    if severities and finding.severity.value not in severities:
-        return False
-    if states and finding.state.value not in states:
-        return False
-    if updated_after is not None:
-        updated_at = _parse_datetime(finding.updated_at)
-        if updated_at is None or updated_at.date() < updated_after:
-            return False
-    return True
+def _sort_key(sort_by: str, finding: dict[str, Any]):
+    fid = str(finding.get("id", ""))
+    if sort_by == "severity":
+        sev_rank = SEVERITY_ORDER.get(str(finding.get("severity", "")).lower(), 99)
+        due = _due_at(finding) or datetime.max.replace(tzinfo=timezone.utc)
+        created = _parse_dt(finding.get("created_at")) or datetime.max.replace(tzinfo=timezone.utc)
+        return (sev_rank, due, created, fid)
+    if sort_by == "created_at":
+        created = _parse_dt(finding.get("created_at")) or datetime.max.replace(tzinfo=timezone.utc)
+        due = _due_at(finding) or datetime.max.replace(tzinfo=timezone.utc)
+        sev_rank = SEVERITY_ORDER.get(str(finding.get("severity", "")).lower(), 99)
+        return (created, due, sev_rank, fid)
+    # default due_at
+    due = _due_at(finding) or datetime.max.replace(tzinfo=timezone.utc)
+    sev_rank = SEVERITY_ORDER.get(str(finding.get("severity", "")).lower(), 99)
+    created = _parse_dt(finding.get("created_at")) or datetime.max.replace(tzinfo=timezone.utc)
+    return (due, sev_rank, created, fid)
+
+
+def _load_findings(path: str) -> list[dict[str, Any]]:
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    if isinstance(data, list):
+        return [x for x in data if isinstance(x, dict)]
+    if isinstance(data, dict) and isinstance(data.get("findings"), list):
+        return [x for x in data["findings"] if isinstance(x, dict)]
+    return []
 
 
 def main() -> int:
-    args = build_parser().parse_args()
-    findings = _load_findings(Path(args.findings))
+    parser = argparse.ArgumentParser(description="Check vulnerability remediation SLA status")
+    parser.add_argument("--findings", required=True, help="Path to findings JSON file")
+    parser.add_argument("--json", action="store_true", help="Emit JSON output")
+    parser.add_argument("--summary-only", action="store_true", help="Only print summary counts")
+    parser.add_argument(
+        "--sort-by",
+        choices=["due_at", "severity", "created_at"],
+        default="due_at",
+        help="Deterministic ordering for filtered findings output (default: due_at)",
+    )
+    args = parser.parse_args()
 
-    severities = {s.lower() for s in args.severity}
-    states = {s.lower() for s in args.state}
+    now = datetime.now(timezone.utc)
+    findings = _load_findings(args.findings)
 
-    filtered = [
-        f
-        for f in findings
-        if _matches_filters(f, severities=severities, states=states, updated_after=args.updated_after)
-    ]
+    enriched: list[dict[str, Any]] = []
+    for f in findings:
+        status = str(f.get("status", "")).lower()
+        if status in {"closed", "resolved", "accepted", "mitigated"}:
+            continue
+        due = _due_at(f)
+        is_overdue = bool(due and due < now)
+        row = dict(f)
+        row["due_at"] = _iso(due)
+        row["overdue"] = is_overdue
+        enriched.append(row)
 
-    overdue = [f for f in filtered if is_overdue(f)]
+    summary = {
+        "total_open": len(enriched),
+        "overdue": sum(1 for x in enriched if x.get("overdue")),
+        "by_severity": {"critical": 0, "high": 0, "medium": 0, "low": 0},
+    }
+    for x in enriched:
+        sev = str(x.get("severity", "")).lower()
+        if sev in summary["by_severity"]:
+            summary["by_severity"][sev] += 1
+
+    ordered = sorted(enriched, key=lambda f: _sort_key(args.sort_by, f))
+
+    if args.json:
+        payload = {"summary": summary, "findings": ordered}
+        print(json.dumps(payload, indent=2))
+        return 0
 
     if not args.summary_only:
-        for f in overdue:
-            print(f"{f.id}\t{f.severity.value}\t{f.state.value}\toverdue")
+        for x in ordered:
+            print(
+                f"[{str(x.get('severity', 'unknown')).upper()}] "
+                f"{x.get('id', '<no-id>')} "
+                f"status={x.get('status', 'unknown')} "
+                f"created_at={x.get('created_at')} due_at={x.get('due_at')} "
+                f"overdue={x.get('overdue')}"
+            )
 
-    print(
-        json.dumps(
-            {
-                "total": len(filtered),
-                "overdue": len(overdue),
-                "compliant": len(filtered) - len(overdue),
-            }
-        )
-    )
-
-    return 1 if overdue else 0
+    print("\nSummary:")
+    print(f"  total_open: {summary['total_open']}")
+    print(f"  overdue: {summary['overdue']}")
+    print("  by_severity:")
+    for sev in ("critical", "high", "medium", "low"):
+        print(f"    {sev}: {summary['by_severity'][sev]}")
+    return 0
 
 
 if __name__ == "__main__":
